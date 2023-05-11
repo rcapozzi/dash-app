@@ -1,0 +1,6 @@
+plotly
+dash
+pandas
+numpy
+pyarrow
+fastparquet
