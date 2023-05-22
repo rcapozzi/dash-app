@@ -41,6 +41,11 @@ function fetchData() {
       console.error('Error fetching data:', error);
     });
 }
+// // Call the fetchData() function to initially fetch and update the graph
+// fetchData();
+
+// // Set an interval to periodically fetch and update the graph with incremental data
+// setInterval(fetchData, 60000); // 60 seconds interval
 
 function formatDateTime(date) {
   const year = date.getFullYear();
@@ -73,9 +78,10 @@ function do_graph1(data) {
       console.log('do_graph1 data is undefined');
       return {'data': [], 'layout': {}};
   }
+  const y2 = data.y.map(value => -value);
   const fig = {
       // 'data': [{'x': data.x, 'y': data.y}],
-      'data': [data],
+      'data': [data, {'x': data.x, 'y': y2}],
       'layout': {
           'title': 'Memory Gaph Client Side'
        }
