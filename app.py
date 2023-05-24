@@ -14,49 +14,15 @@ import numpy as np
 import datetime
 import math
 import pytz
-from dash import Dash, html, dcc, Output, Input, dash_table
+import dash
+from dash import Dash, html, dcc, Output, Input, dash_table, ctx
 import dash_bootstrap_components as dbc
 import logging
 from utils import OptionQuotes
-import random
-
-def console_logger():
-    # create console handler and set level to debug
-    ch = logging.StreamHandler()
-    ch.setLevel(logging.DEBUG)
-
-    # create formatter
-    formatter = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
-    formatter = logging.Formatter('%(asctime)s %(funcName)s: %(message)s')
-
-    # add formatter to ch
-    ch.setFormatter(formatter)
-
-    # add ch to logger
-    logger = logging.getLogger('app')
-    logger.setLevel(logging.DEBUG)
-    logger.addHandler(ch)
-    return logger
-#logger = console_logger()from dataclasses import dataclass
-
-
-def transformToLadder(df):
-    """Given a DF with one row per contract, join the calls and puts together for the same period."""
-    dfc = df[df['putCall'].str.contains('CALL', na=False, regex=False)]
-    dfp = df[df['putCall'].str.contains('PUT', na=False, regex=False)]
-    dfcp = dfc.merge(dfp, left_on=['strikePrice', 'processDateTime'], right_on=['strikePrice', 'processDateTime'], how='left', suffixes=['_c', '_p'])
-
-    for c in ['underlyingPrice']:
-        dfcp.rename(columns={c + '_c':c}, inplace=True)
-        dfcp.pop(c + '_p')
-
-    # Drops
-    dfcp.pop('putCall_c')
-    dfcp.pop('putCall_p')
-    return dfcp
-
+import dash_extendable_graph as deg
 import glob
 import re
+
 def get_files():
     file_dict = {}
     #for filename in os.listdir('../tda-tbd/data/*.parquet'):
@@ -145,20 +111,14 @@ def dash_layout():
                             className="dropdown",
                         ),
                     ]),
-                    # html.Div(children=[
-                    #     html.Div(children="Type", className="menu-type"),
-                    #     dcc.Dropdown(
-                    #         id="z-axis",
-                    #         options=[ {"label": f,"value": f} for f in zfields ],
-                    #         value='scatter', clearable=False, className="dropdown",
-                    #     ),
-                    # ]),
                 ],
                 className="menu",
             ),
             html.Div(id='strikes-selector-div', className="card"),
             html.Div(dcc.Graph(id="pc-summary", config={"displayModeBar": False}), className="card",),
-            html.Div(dcc.Graph(id="pc-net-volume", config={"displayModeBar": False}), className="card",),
+            html.Div(
+                deg.ExtendableGraph(id="pc-volume-graph", config={"displayModeBar": False}, className="card")),
+            dcc.Interval(id='pc-volume-interval', interval=60*1000),
             #html.Div(dcc.Graph(id="pc-put", config={"displayModeBar": False}), className="card",),
             # html.Div(children = dcc.Graph(id="scatter3d-call", config={"displayModeBar": False}), className="card", ),
             # html.Div(children = dcc.Graph(id="scatter3d-put", config={"displayModeBar": False}), className="card", ),
@@ -222,28 +182,45 @@ def update_strikesselector(symbol):
                 tooltip={"placement": "bottom", "always_visible": True}, id='strikes-rangeslider')
     ]
 
-def chart_net_volume(df, yaxis):
+@app.callback([
+        Output('pc-volume-interval', 'n_intervals'),
+        Output('pc-volume-graph', 'figure'),
+        Output('pc-volume-graph', 'extendData')],
+        Input('pc-volume-interval', 'n_intervals'),
+        Input("symbol", "value")
+)
+def func(n_intervals, symbol):
+    ids = ctx.triggered_prop_ids
+    # app.logger.info(f'pc-volume-graph << n={n_intervals} symbol={symbol} ids={ids}')
     # now_dt = datetime.datetime.now(pytz.timezone('US/Eastern'))
-    # app.logger.info(f'chart_net_volume enter {now_dt}')
-    # if now_dt.time().hour < 16:
-    #     cutoff_dt = now_dt - datetime.timedelta(minutes=120)
-    #     df = df.loc[df.processDateTime > cutoff_dt]
+    if n_intervals is None or 'symbol.value' in ctx.triggered_prop_ids:
+        n_intervals = 0
+        fig = go.Figure(layout={'title':f'Cummulative Put/Call Volume {symbol}', 'template': 'plotly_dark', 'height':400},
+            data=[go.Bar(name='Net', marker_color='lightslategray',x=[], y=[]), go.Scatter(name='SMA10', line_color="lightsalmon",x=[],y=[])])
+    else:
+        fig = dash.no_update
+
     yaxis = 'totalVolume'
+    df = app.OptionQuotes[symbol].reload()
+
     s = df.groupby(['putCall', 'processDateTime'])[yaxis].sum()
-    fig = make_subplots(specs=[[{"secondary_y": False}]])
+    dfx = pd.DataFrame()
+    dfx['puts'] = s.loc[('PUT', slice(None))]
+    dfx['calls'] = s.loc[('CALL', slice(None))]
+    dfx['net'] = dfx.calls - dfx.puts
+    dfx['mean'] = dfx.net.rolling(10).mean()
 
-    puts = s.loc[('PUT', slice(None))]
-    calls = s.loc[('CALL', slice(None))]
-    net = calls - puts
-    color_df = np.where(net < 0, 'lightsalmon', 'lightslategray')
+    max_dt = datetime.datetime.utcfromtimestamp(n_intervals)
+    max_dt = max_dt.replace(tzinfo=pytz.utc).astimezone(pytz.timezone('US/Eastern'))
 
-    fig.add_trace(go.Bar(x=calls.index, y=net.values, name='Net', marker_color=color_df) )
-    #fig.add_trace(go.Scattergl(x=calls.index, y=net.values, name='Net', marker_color='white') )
+    dfx = dfx[(dfx.index > max_dt)]
+    if dfx.empty:
+        return [n_intervals-1, fig, None]
+    n_intervals = int(dfx.index.max().timestamp())
 
-    net = net.rolling(10).mean()
-    fig.add_trace(go.Scattergl(x=calls.index, y=net.values, name='SMA10', marker_color='yellow') )
-    fig.update_layout(title_text=f'SPX Put/Call {yaxis}', template='plotly_dark', height=600)
-    return fig
+    data = [ { 'x': dfx.index, 'y': dfx['net'].values }, { 'x': dfx.index, 'y': dfx['mean'].values, }, ]
+    #app.logger.info(f'pc-volume-graph >> n={n_intervals} max_dt={max_dt} data={data[-60:]}')       
+    return [n_intervals, fig, data]
 
 # Idealy return 
 # {'x': '2023-05-19 09:56', 'y': [{'SPXW_051923P4250': -9 }, 'SPXW_051923C4250': 75 }] }
@@ -290,7 +267,6 @@ def chart_pc_summary(df, strikes, yaxis):
 
 @app.callback(
     Output("pc-summary", "figure"),
-    Output("pc-net-volume", "figure"),
     Input("symbol", "value"),
     Input("strikes-rangeslider", "value"),
     Input("x-axis", "value"),
@@ -302,10 +278,8 @@ def update_charts(symbol, strikes, xaxis, yaxis, n):
     if not hasattr(df, '_fig_summary'):
         #FIX: Issues UserWarning
         df._fig_summary = chart_pc_summary(df, strikes, yaxis)
-    if not hasattr(df, '_fig_net_volume'):
-        df._fig_net_volume = chart_net_volume(df, yaxis)
     #fig_call.update_layout(height=600, width = 800)
-    return [df._fig_summary, df._fig_net_volume]
+    return df._fig_summary
 
 def calc_interval_to_update():
     # now_dt = datetime.datetime.now(pytz.timezone('US/Eastern'))
@@ -318,10 +292,7 @@ def calc_interval_to_update():
     # else: interval = 86400
     return 120
 
-@app.callback(
-    Output("metrics", "children"),
-    [Input('symbol', 'value'), Input('graph-update','n_intervals')],
-)
+@app.callback( Output("metrics", "children"), [Input('symbol', 'value'), Input('graph-update','n_intervals')],)
 def update_metrics(*args):
     symbol = args[0]
     style_metrics = {'padding': '5px', 'fontsize:': '10px'}
