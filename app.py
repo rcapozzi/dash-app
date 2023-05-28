@@ -15,7 +15,7 @@ import datetime
 import math
 import pytz
 import dash
-from dash import Dash, html, dcc, Output, Input, dash_table, ctx
+from dash import Dash, html, dcc, Output, Input, State, dash_table, ctx
 import dash_bootstrap_components as dbc
 import logging
 from utils import OptionQuotes
@@ -60,7 +60,6 @@ def dash_layout():
         return html.Div([
             html.Hr(),
             html.H1("You filthy Degen. Check back during market hours."),
-            #html.Span(f'No file for {filename}'),
             html.Span(f'{e}', style={'padding': '5px', 'fontsize:': '10px'}),
         ])
 
@@ -76,8 +75,7 @@ def dash_layout():
                 html.Summary('Secret Section', style={'color': 'red', 'background': 'black'}),
                 html.Div(id="data-table-div"),
             ]),
-            html.Div(id='metrics', style={'padding': '5px', 'fontsize:': '10px', 'font-family': 'monospace'},
-                     children=dcc.Interval(id='graph-update', interval=60*1000)),
+            html.Div(id='metrics-div', style={'padding': '5px', 'fontsize:': '10px', 'font-family': 'monospace'}, ),
             html.Div(
                 children=[
                     html.Div(children=[
@@ -115,15 +113,13 @@ def dash_layout():
                 className="menu",
             ),
             html.Div(id='strikes-selector-div', className="card"),
-            html.Div(dcc.Graph(id="pc-summary", config={"displayModeBar": False}), className="card",),
-            html.Div(
-                deg.ExtendableGraph(id="pc-volume-graph", config={"displayModeBar": False}, className="card")),
-            dcc.Interval(id='pc-volume-interval', interval=60*1000),
-            #html.Div(dcc.Graph(id="pc-put", config={"displayModeBar": False}), className="card",),
-            # html.Div(children = dcc.Graph(id="scatter3d-call", config={"displayModeBar": False}), className="card", ),
-            # html.Div(children = dcc.Graph(id="scatter3d-put", config={"displayModeBar": False}), className="card", ),
-            #html.Div(id="data-table-div", className="card"),
 
+            html.Div(deg.ExtendableGraph(id="pc-summary-graph", config={"displayModeBar": False}), className="card",),
+            dcc.Interval(id='pc-summary-interval', interval=60*1000),
+            dcc.Store(id="pc-summary-store", data=None, modified_timestamp=0),
+
+            html.Div(deg.ExtendableGraph(id="pc-volume-graph", config={"displayModeBar": False}, className="card")),
+            dcc.Interval(id='pc-volume-interval', interval=60*1000),
         ]
     )
 
@@ -139,19 +135,6 @@ app = Dash(__name__, external_stylesheets=external_stylesheets, suppress_callbac
 server = app.server
 app.title = 'SPX 0DTE Chain React Analytics Peaker'
 app.layout = dash_layout
-
-@app.callback(
-    Output("data-table-div", "children"),
-    Input('symbol', 'value'),
-    Input('graph-update','n_intervals'), prevent_initial_call=True
-)
-def table(symbol, n):
-    now = app.OptionQuotes[symbol].data.processDateTime.max()
-    data = app.OptionQuotes[symbol].data
-    # df = data[(data.processDateTime == now) & (data.volume > data.volume.mean())]
-    df = data[(data.processDateTime == now) & (data.totalVolume > data.totalVolume.mean())]
-    dt = dash_table.DataTable(df.to_dict('records'), [{"name": i, "id": i} for i in df.columns])
-    return [html.Label("Active Strikes"), dt]
 
 @app.callback(
     Output("strikes-selector-div", "children"),
@@ -190,7 +173,7 @@ def update_strikesselector(symbol):
         Input("symbol", "value")
 )
 def func(n_intervals, symbol):
-    ids = ctx.triggered_prop_ids
+    # ids = ctx.triggered_prop_ids
     # app.logger.info(f'pc-volume-graph << n={n_intervals} symbol={symbol} ids={ids}')
     # now_dt = datetime.datetime.now(pytz.timezone('US/Eastern'))
     if n_intervals is None or 'symbol.value' in ctx.triggered_prop_ids:
@@ -222,16 +205,26 @@ def func(n_intervals, symbol):
     #app.logger.info(f'pc-volume-graph >> n={n_intervals} max_dt={max_dt} data={data[-60:]}')       
     return [n_intervals, fig, data]
 
-# Idealy return 
-# {'x': '2023-05-19 09:56', 'y': [{'SPXW_051923P4250': -9 }, 'SPXW_051923C4250': 75 }] }
-# { 'name': 'SPXW_051923P4250', 'x': datetime.datetime(2023, 5, 19, 9, 46), 'y': -9 },
-# { 'name': 'SPXW_051923C4250', 'x': datetime.datetime(2023, 5, 19, 9, 46), 'y': 75 }
-def chart_pc_summary(df, strikes, yaxis):
-    """
-    import plotly.io as pio
-    pio.renderers.default='svg'
-    value="%H:%M")
-    """
+def table_content(oq):
+    now = oq.data.processDateTime.max()
+    data = oq.data
+    df = data[(data.processDateTime == now) & (data.totalVolume > data.totalVolume.mean())]
+    dt = dash_table.DataTable(df.to_dict('records'), [{"name": i, "id": i} for i in df.columns])
+    return [html.Label("Active Strikes"), dt]
+
+def metric_content(symbol):
+    style_metrics = {'padding': '5px', 'fontsize:': '10px'}
+    oq = app.OptionQuotes[symbol]
+    df = oq.data
+    maxProcessDateTime = df.processDateTime.max()
+    return [
+        html.Span(f"{maxProcessDateTime.strftime('%Y-%m-%d %H:%M:%S')}", style=style_metrics),
+        html.Span(f"{symbol} Last: {df[df.processDateTime == maxProcessDateTime].underlyingPrice.min() }", style=style_metrics),
+        html.Span(f"Range: {df.underlyingPrice.min()}/{df.underlyingPrice.max()}", style=style_metrics),
+        html.Span(f"Strikes: {df.strikePrice.min()}/{df.strikePrice.max()}", style=style_metrics),
+    ]
+
+def chart_pc_summary(df, strikes, yaxis, title=None):
     xaxis = 'processDateTime'
     hovertemplate = '<br>'.join(['%{fullData.name}', xaxis + '=%{x}', yaxis +'=%{y}', 'mark=%{customdata}', '<extra></extra>' ])
     fig = make_subplots(specs=[[{"secondary_y": True}]])
@@ -244,9 +237,6 @@ def chart_pc_summary(df, strikes, yaxis):
         sign = 1 if data[(data.symbol == s)].iloc[0].putCall == 'CALL' else -1
         x=data[(data.symbol == s)][xaxis].dt.tz_localize(tz=None)
         y=data[(data.symbol == s)][yaxis]
-        maxVal =y.max()
-        if maxVal < 100:
-            continue
         y = y * sign
         cd=data[(data.symbol == s)].mark
         fig.add_trace(go.Scattergl(x=x, y=y, customdata=cd, name=s, text=s, mode='markers', hovertemplate=hovertemplate), secondary_y=False,)
@@ -260,59 +250,85 @@ def chart_pc_summary(df, strikes, yaxis):
     fig['layout']['yaxis2']['showgrid'] = False
     fig.update_yaxes(title_text="<b>underlyingPrice</b>", secondary_y=True)
     fig.update_xaxes(tickformat="%H:%M")
-    fig.update_layout(title_text=f'SPX Call/Put Pez Dispenser {df._pretty_name} {yaxis}', template='plotly_dark', height=600)
-    #x = datetime.datetime.now(pytz.timezone('US/Eastern'))
+    fig.update_layout(title_text=f'SPX Call/Put Pez Dispenser {title} {yaxis}', template='plotly_dark', height=600)
+    state = { 'names': [row['name'] for row in fig["data"]],  'max_dt': df.processDateTime.max(), 'strikes': strikes, 'yaxis': yaxis }
+    #app.logger.info(f'chart_pc_summary returns state={state}')
     #app.logger.info(f'chart_pc_summary returns x={x}')
-    return fig
+    return state, fig
+
 
 @app.callback(
-    Output("pc-summary", "figure"),
+    Output("pc-summary-store", "data", allow_duplicate=True),
+    Output("pc-summary-graph", "extendData"),
+    Output("data-table-div", "children"),
+    Output("metrics-div", "children"), 
+    Input('pc-summary-interval','n_intervals'), 
+    State("pc-summary-store", "data"),
+    prevent_initial_call=True
+)
+def func(n_interval, cookie):
+    # grey = "\x1b[38;20m"
+    # yellow = "\x1b[33;20m"
+    # red = "\x1b[31;20m"
+    # bold_red = "\x1b[31;1m"
+    # reset = "\x1b[0m"
+    # fmt = f'{yellow}extendData_cb{reset}'
+
+    #dt = pytz.timezone("US/Eastern").localize(datetime.datetime(2023, 5, 19, 11, 0)) + datetime.timedelta(minutes=n_interval)
+    max_dt = cookie['max_dt']
+    #app.logger.info(f'{fmt} << n_interval={n_interval} {yellow}max_dt={max_dt}  {red}dt={dt}{reset}')
+
+    symbol = cookie['symbol']
+    oq = app.OptionQuotes[cookie['symbol']]
+    df = oq.reload()
+    #df = df[(df.processDateTime > max_dt) & (df.processDateTime <= dt)]
+    df = df[(df.processDateTime > max_dt)]
+    if df.empty:
+        # app.logger.info(f'{fmt} >> No new data')
+        return cookie, None, table_content(oq), metric_content(symbol)
+    state, fig = chart_pc_summary(df, cookie['strikes'], cookie['yaxis'], title='Nope')
+
+    data = {item['name']: {'x': item['x'], 'y': item['y']} for item in fig['data']}
+    #app.logger.info(f'{fmt} >> data={data}')
+
+    # 1. Every existing traces needs a row
+    updates = []
+    for name in cookie['names']:
+        if name in data:
+            updates.append(data[name])
+        else:
+            updates.append({'x':[], 'y':[]})
+    # 2. Add new traces
+    new_traces = set(data.keys()) - set(cookie['names'])
+    for name in new_traces:
+        updates.append(data[name])
+
+    cookie['names'].extend(new_traces)
+    cookie['max_dt'] = state['max_dt']
+    # app.logger.info(f'{fmt} >> updates={updates}')
+    c0 = table_content(oq)
+    c1 = metric_content(symbol)
+    return cookie, updates, c0, c1
+
+@app.callback(
+    Output("pc-summary-store", "data"),
+    Output("pc-summary-graph", "figure"),
     Input("symbol", "value"),
     Input("strikes-rangeslider", "value"),
     Input("x-axis", "value"),
     Input("y-axis", "value"),
-    Input('graph-update','n_intervals'), prevent_initial_call=True
+    prevent_initial_call=True
 )
-def update_charts(symbol, strikes, xaxis, yaxis, n):
+def func(symbol, strikes, xaxis, yaxis):
     df = app.OptionQuotes[symbol].reload()
-    if not hasattr(df, '_fig_summary'):
-        #FIX: Issues UserWarning
-        df._fig_summary = chart_pc_summary(df, strikes, yaxis)
-    #fig_call.update_layout(height=600, width = 800)
-    return df._fig_summary
+    #dt = pytz.timezone("US/Eastern").localize(datetime.datetime(2023, 5, 19, 11, 0))
+    #app.logger.info(f'pc_summary << dt={dt}')
+    #dfx = df[(df.processDateTime < dt)]
 
-def calc_interval_to_update():
-    # now_dt = datetime.datetime.now(pytz.timezone('US/Eastern'))
-    # maxProcessDateTime = df.processDateTime.max()
-    # next_dt = maxProcessDateTime + datetime.timedelta(seconds=65)
-    # seconds_delay = int((next_dt - now_dt).total_seconds())
-    # interval = int(seconds_delay)
-    # if now_dt.hour > 8 and now_dt.hour < 16:
-    #     interval = seconds_delay if seconds_delay > 0 else 59
-    # else: interval = 86400
-    return 120
+    state, fig_summary = chart_pc_summary(df, strikes, yaxis, title=symbol)
+    state['symbol'] = symbol
+    return state, fig_summary
 
-@app.callback( Output("metrics", "children"), [Input('symbol', 'value'), Input('graph-update','n_intervals')],)
-def update_metrics(*args):
-    symbol = args[0]
-    style_metrics = {'padding': '5px', 'fontsize:': '10px'}
-    oq = app.OptionQuotes[symbol]
-    df = oq.data
-    maxProcessDateTime = df.processDateTime.max()
-    interval = 10
-
-    return [
-        html.Span(dcc.Interval(id='graph-update', interval=interval*1000)),
-        html.Span(f"{maxProcessDateTime.strftime('%Y-%m-%d %H:%M:%S')}", style=style_metrics),
-        html.Span(f"{symbol} Last: {df[df.processDateTime == maxProcessDateTime].underlyingPrice.min() }", style=style_metrics),
-        html.Span(f"Range: {df.underlyingPrice.min()}/{df.underlyingPrice.max()}", style=style_metrics),
-        html.Span(f"Strikes: {df.strikePrice.min()}/{df.strikePrice.max()}", style=style_metrics),
-        html.Span(f"Refresh: {interval}s", style=style_metrics),
-        # html.Div([
-        #     html.Span(f"filename:{app.OptionQuotes.filename}", style=style_metrics),
-        #     html.Span(f"size:{len(df)}", style=style_metrics),
-        #     ]),
-        ]
 
 if __name__ == '__main__':
     app.run_server(debug=True, host='0.0.0.0')
