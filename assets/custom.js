@@ -1,26 +1,90 @@
 // custom.js
 
-// Assuming you have included the Plotly.js library
+function updateGraph(id, message) {
+  var graphDiv = document.getElementById(id);
+  var graphData = graphDiv.data;
+  if (message === undefined) {
+    console.log('updateGraph ! message undefined');
+    return;
+  }
+  if (!('data' in message)) {
+    console.error('updateGraph ! message undefined');
+    return;
+  }
+  if (graphData === undefined) {
+    console.log('updateGraph - graphData undefined. Creating.');
+    graphData = [];
+  }
+
+  var ts = message.ts;
+  var messageData = message.data;
+  for (var i = 0; i < messageData.length; i++) {
+    var symbol = messageData[i][0];
+    var value = messageData[i][1];
+
+    // Check if the symbol already exists in the graph data
+    var existingData = graphData.find(function(item) {
+      return item.name === symbol;
+    });
+
+    if (existingData) {
+      // Symbol already exists, update x and y values
+      existingData.x.push(ts);
+      existingData.y.push(value);
+    } else {
+      // Symbol doesn't exist, create a new hash and append it to graph data
+      var newData = {
+        x: [ts],
+        y: [value],
+        name: symbol
+      };
+      graphData.push(newData);
+    }
+  }
+  Plotly.react(graphDiv,graphData,{title:'v.' + ts, datarevision: ts})
+  delete message['data'];
+  return message;
+}
+
 
 // Function to update the graph with new data
-function updateGraph(newData) {
-  // Access the existing graph container
-  var graphContainer = document.getElementById('live-graph1');
+function updateGraphDemo(id, newData) {
+  // console.log('updateGraph <<', id, newData);
+  var graphContainer = document.getElementById(id);
+  if (newData === undefined){
+    console.log('updateGraph >> newData undefined');
+    return;
+  }
+  if (graphContainer.data !== undefined){
+    // console.log('updateGraph -- graphContainer already defined');
+    return;
+  }
+  console.log('updateGraph -- graphContainer has no data. Making it...', id, newData);
 
-  // Update the graph data with the new data
-  var updatedData = {
-    x: newData.x,
-    y: newData.y,
-    type: 'line'
-  };
-
-  // Update the graph layout if necessary
+  var data = [{
+    x: [1999, 2000, 2001, 2002],
+    y: [10, 15, 13, 17],
+    name: '1st',
+    type: 'scatter'
+  }];
   var updatedLayout = {
     title: 'Live Graph'
   };
 
-  // Plotly.js update function to redraw the graph
-  Plotly.update(graphContainer, [updatedData], updatedLayout);
+  Plotly.react(graphContainer, data, updatedLayout);
+  data[0].name = 'New Name';
+  data.push({
+    x: [1999, 2000, 2001, 2002],
+    y: [20, 25, 23, 27],
+    name: '2nd',
+    type: 'scatter'
+  });
+  Plotly.react(graphContainer, data, updatedLayout);
+  data[0].name = 'New Name2';
+  data[1].x.push(2003);
+  data[1].y.push(20);
+  // Bump revision to trigger redraw.
+  Plotly.react(graphContainer, data, { title: 'Some Title', datarevision: 0 });
 }
 
 // Function to fetch the incremental data from the server
@@ -72,15 +136,14 @@ function convertDates(series) {
   })
 };
 
-function do_graph1(data) {
-  console.log('do_graph1 enter', data);
+function graph1_cb(data) {
+  // console.log('graph1_cb enter', data);
   if(data === undefined) {
-      console.log('do_graph1 data is undefined');
+      console.log('graph1_cb data is undefined');
       return {'data': [], 'layout': {}};
   }
   const y2 = data.y.map(value => -value);
   const fig = {
-      // 'data': [{'x': data.x, 'y': data.y}],
       'data': [data, {'x': data.x, 'y': y2}],
       'layout': {
           'title': 'Memory Gaph Client Side'
@@ -91,8 +154,8 @@ function do_graph1(data) {
 
 window.dash_clientside = Object.assign({}, window.dash_clientside, {
   clientside: {
-      do_graph1: function(data) {
-          return do_graph1(data);
+      graph1_cb: function(data) {
+          return graph1_cb(data);
       },
       merge_stores: function(data, old_data) {
         if(data === undefined) {
@@ -107,7 +170,7 @@ window.dash_clientside = Object.assign({}, window.dash_clientside, {
           'x': [...old_data.x, ...data.x],
           'y': [...old_data.y, ...data.y]
         }
-        console.log('merge_stores return data', out_data);
+        // console.log('merge_stores return data', out_data);
         return out_data;
       }
   }
