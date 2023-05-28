@@ -41,9 +41,7 @@ class OptionQuotes:
             self.filename = filename
         else:
             self.filename = f'data/{symbol}.2023-05-04.parquet'
-        self.interval = 60
         self.last_mtime = 0
-        #logger.debug(f'OptionQuotes new {self.symbol}')
         self.reload(force=True)
         pass
 
@@ -90,8 +88,8 @@ class OptionQuotes:
         # df['sma5'] = df.mark.rolling(5).mean().round(2)
         # df['sma10'] = df.mark.rolling(10).mean().round(2)
 
-        time = df.processDateTime.dt.time
-        df.loc[(time >= pd.to_datetime('09:40:00').time() ),  ['sma5', 'sma10'] ] = np.nan
+        #time = df.processDateTime.dt.time
+        #df.loc[(time >= pd.to_datetime('09:40:00').time() ),  ['sma5', 'sma10'] ] = np.nan
 
         df = self.filter_low_volume(df, 50)
         df = self.filter_rth(df)
@@ -133,6 +131,7 @@ class OptionQuotes:
         s = df.groupby(['symbol']).totalVolume.max() < minVolume
         symbols = s[s].index.values
         df = df[ ~df['symbol'].isin(symbols) ]
+        df = df.groupby('symbol').filter(lambda x: len(x) >= 2)
         return df.copy()
 
     def calc_spreads(self, df, distance):
