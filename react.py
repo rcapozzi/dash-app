@@ -1,5 +1,5 @@
 """
-Extending from incremental, compare and contrast dash_extendable_graph with the standard Graph incremental update.
+Extending from polling, compare and contrast dash_extendable_graph with the standard Graph incremental update.
 A store is added to extend-graph output to enable the client side JS to ...
 """
 import datetime
