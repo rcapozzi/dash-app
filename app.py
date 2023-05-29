@@ -23,6 +23,51 @@ import dash_extendable_graph as deg
 import glob
 import re
 
+def seconds_to_monday():
+    from datetime import datetime, timedelta, time
+    eastern_tz = pytz.timezone('US/Eastern')
+    try:
+        current_time = datetime.now().astimezone(pytz.timezone('US/Eastern'))
+        current_day = current_time.weekday()
+        days_ahead = (0 - current_day + 7) % 7  # Number of days until next Monday
+        next_monday = current_time + timedelta(days=days_ahead)
+        target_time = datetime.combine(next_monday.date(), time(9, 30))
+        target_time = eastern_tz.localize(target_time)
+        time_difference = (target_time - current_time).total_seconds()
+    except Exception as e:
+        app.logger.info(f'seconds_to_monday ! {e}')
+    return int(time_difference)
+
+def is_market_closed():
+    from datetime import datetime, time
+    rv = False
+    try:
+        current_time = datetime.now().astimezone(pytz.timezone('US/Eastern'))
+        current_day = current_time.weekday()
+        if (
+            (current_day == 4 and current_time.time() >= time(16))  # Friday after 4 pm
+            or (current_day == 5)                                 # Saturday
+            or (current_day == 6)                                 # Sunday
+            or (current_day == 0 and current_time.time() <= time(9, 30))  # Monday before 9:30 am
+        ):
+            rv = True
+        if (
+            current_day >= 0 and current_day <= 4   # Monday to Friday
+            and current_time.time() >= time(9, 30)         # After 9:30 am
+            and current_time.time() <= time(16)            # Before or at 4 pm
+        ):
+            rv = False
+    except Exception as e:
+        app.logger.info(f'is_market_closed ! {e}')
+
+    return rv
+
+def calc_interval():
+    if is_market_closed():
+        return seconds_to_monday()
+    return 60
+
+
 def get_files():
     file_dict = {}
     #for filename in os.listdir('../tda-tbd/data/*.parquet'):
@@ -63,11 +108,12 @@ def dash_layout():
             html.Span(f'{e}', style={'padding': '5px', 'fontsize:': '10px'}),
         ])
 
-    xfields = [ 'processDateTime']#, 'underlyingPrice', 'strikePrice']
-    yfields = [ 'volume'] #, 'markVol', 'gexVol', 'mark', 'totalVolume', 'delta' ]
+    xfields = [ 'processDateTime', 'strikePrice']#, 'underlyingPrice', 'strikePrice']
+    yfields = [ 'volume', 'markVol', 'distance', 'totalVolume'] #, 'markVol', 'gexVol', 'mark', 'totalVolume', 'delta' ]
+    intervalDisabled = is_market_closed()
+    interval = 60
 
-    return html.Div(
-        children=[
+    return html.Div([
             dbc.Alert(id='alerts'),
             #html.H1(children="SPX 0DTE Option Chain Analytics"),
             html.Hr(),
@@ -76,28 +122,22 @@ def dash_layout():
                 html.Div(id="data-table-div"),
             ]),
             html.Div(id='metrics-div', style={'padding': '5px', 'fontsize:': '10px', 'font-family': 'monospace'}, ),
-            html.Div(
-                children=[
+            html.Div(children=[
                     html.Div(children=[
                         html.Div(children="Symbol", className="menu-title"),
                         dcc.Dropdown(
                             id="symbol",
                             options=[ {"label": f,"value": f} for f in symbols ],
                             value=symbols[0],
-                            clearable=False,
-                            className="dropdown",
-                            ),
+                            clearable=False, className="dropdown", ),
                     ]),
-
                     html.Div(children=[
                         html.Div(children="x-axis", className="menu-title"),
                         dcc.Dropdown(
                             id="x-axis",
                             options=[ {"label": f,"value": f} for f in xfields ],
                             value=xfields[0],
-                            clearable=False,
-                            className="dropdown",
-                            ),
+                            clearable=False, className="dropdown", ),
                     ]),
                     html.Div(children=[
                         html.Div(children="y-axis", className="menu-title"),
@@ -105,9 +145,7 @@ def dash_layout():
                             id="y-axis",
                             options=[ {"label": f,"value": f} for f in yfields ],
                             value=yfields[0],
-                            clearable=False,
-                            className="dropdown",
-                        ),
+                            clearable=False, className="dropdown", ),
                     ]),
                 ],
                 className="menu",
@@ -115,13 +153,12 @@ def dash_layout():
             html.Div(id='strikes-selector-div', className="card"),
 
             html.Div(deg.ExtendableGraph(id="pc-summary-graph", config={"displayModeBar": False}), className="card",),
-            dcc.Interval(id='pc-summary-interval', interval=60*1000),
+            dcc.Interval(id='pc-summary-interval', interval=interval*1000, disabled=intervalDisabled),
             dcc.Store(id="pc-summary-store", data=None, modified_timestamp=0),
 
             html.Div(deg.ExtendableGraph(id="pc-volume-graph", config={"displayModeBar": False}, className="card")),
-            dcc.Interval(id='pc-volume-interval', interval=60*1000),
-        ]
-    )
+            dcc.Interval(id='pc-volume-interval', interval=interval*1000, disabled=intervalDisabled),
+        ])
 
 # ====================================================================
 
@@ -224,8 +261,8 @@ def metric_content(symbol):
         html.Span(f"Strikes: {df.strikePrice.min()}/{df.strikePrice.max()}", style=style_metrics),
     ]
 
-def chart_pc_summary(df, strikes, yaxis, title=None):
-    xaxis = 'processDateTime'
+def chart_pc_summary(df, strikes, yaxis, xaxis, title=None):
+    #xaxis = 'processDateTime'
     hovertemplate = '<br>'.join(['%{fullData.name}', xaxis + '=%{x}', yaxis +'=%{y}', 'mark=%{customdata}', '<extra></extra>' ])
     fig = make_subplots(specs=[[{"secondary_y": True}]])
 
@@ -235,23 +272,28 @@ def chart_pc_summary(df, strikes, yaxis, title=None):
 
     for s in symbols:
         sign = 1 if data[(data.symbol == s)].iloc[0].putCall == 'CALL' else -1
-        x=data[(data.symbol == s)][xaxis].dt.tz_localize(tz=None)
+        if xaxis == 'processDateTime':
+            x=data[(data.symbol == s)][xaxis].dt.tz_localize(tz=None)
+        else:
+            x=data[(data.symbol == s)][xaxis]
         y=data[(data.symbol == s)][yaxis]
         y = y * sign
         cd=data[(data.symbol == s)].mark
         fig.add_trace(go.Scattergl(x=x, y=y, customdata=cd, name=s, text=s, mode='markers', hovertemplate=hovertemplate), secondary_y=False,)
 
-    fig.add_trace(
-        go.Scattergl(x=data[(data.symbol == symbols[0])][xaxis].dt.tz_localize(tz=None), y=data[(data.symbol == symbols[0])]['underlyingPrice'].values,
-                   name="underlyingPrice",
-                   marker_color='white'),
-        secondary_y=True,
-    )
+    if xaxis == 'processDateTime':
+        fig.add_trace(
+            go.Scattergl(x=data[(data.symbol == symbols[0])][xaxis].dt.tz_localize(tz=None), y=data[(data.symbol == symbols[0])]['underlyingPrice'].values,
+                    name="underlyingPrice",
+                    marker_color='white'),
+            secondary_y=True,
+        )
     fig['layout']['yaxis2']['showgrid'] = False
     fig.update_yaxes(title_text="<b>underlyingPrice</b>", secondary_y=True)
-    fig.update_xaxes(tickformat="%H:%M")
+    if xaxis == 'processDateTime':
+        fig.update_xaxes(tickformat="%H:%M")
     fig.update_layout(title_text=f'SPX Call/Put Pez Dispenser {title} {yaxis}', template='plotly_dark', height=600)
-    state = { 'names': [row['name'] for row in fig["data"]],  'max_dt': df.processDateTime.max(), 'strikes': strikes, 'yaxis': yaxis }
+    state = { 'names': [row['name'] for row in fig["data"]],  'max_dt': df.processDateTime.max(), 'strikes': strikes, 'yaxis': yaxis, 'xaxis': xaxis }
     #app.logger.info(f'chart_pc_summary returns state={state}')
     #app.logger.info(f'chart_pc_summary returns x={x}')
     return state, fig
@@ -286,7 +328,7 @@ def func(n_interval, cookie):
     if df.empty:
         # app.logger.info(f'{fmt} >> No new data')
         return cookie, None, table_content(oq), metric_content(symbol)
-    state, fig = chart_pc_summary(df, cookie['strikes'], cookie['yaxis'], title='Nope')
+    state, fig = chart_pc_summary(df, cookie['strikes'], cookie['yaxis'], cookie['xaxis'], title='Nope')
 
     data = {item['name']: {'x': item['x'], 'y': item['y']} for item in fig['data']}
     #app.logger.info(f'{fmt} >> data={data}')
@@ -325,7 +367,7 @@ def func(symbol, strikes, xaxis, yaxis):
     #app.logger.info(f'pc_summary << dt={dt}')
     #dfx = df[(df.processDateTime < dt)]
 
-    state, fig_summary = chart_pc_summary(df, strikes, yaxis, title=symbol)
+    state, fig_summary = chart_pc_summary(df, strikes, yaxis, xaxis, title=symbol)
     state['symbol'] = symbol
     return state, fig_summary
 
