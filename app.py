@@ -119,7 +119,7 @@ def dash_layout():
             html.Hr(),
             html.Details([
                 html.Summary('Secret Section', style={'color': 'red', 'background': 'black'}),
-                html.Div(id="data-table-div"),
+                html.Div(id="data-table-div", children=table_content(app.OptionQuotes[symbols[0]])),
             ]),
             html.Div(id='metrics-div', style={'padding': '5px', 'fontsize:': '10px', 'font-family': 'monospace'}, ),
             html.Div(children=[
