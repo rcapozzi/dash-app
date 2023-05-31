@@ -158,6 +158,12 @@ def dash_layout():
 
             html.Div(deg.ExtendableGraph(id="pc-volume-graph", config={"displayModeBar": False}, className="card")),
             dcc.Interval(id='pc-volume-interval', interval=interval*1000, disabled=intervalDisabled),
+            html.Div([
+                html.Span([
+                dcc.Graph(id="strike-volume", config={"displayModeBar": False}, style = {'float':'left', 'width':'49%'},),
+                dcc.Graph(id="strike-volume-right", config={"displayModeBar": False}, style = {'float':'right', 'width':'49%'},),
+                ]),
+                ], className='card'),
         ])
 
 # ====================================================================
@@ -168,6 +174,7 @@ external_stylesheets = [{
     "rel": "stylesheet",
 }]
 
+#TODO: use_pages=True
 app = Dash(__name__, external_stylesheets=external_stylesheets, suppress_callback_exceptions=True)
 server = app.server
 app.title = 'SPX 0DTE Chain React Analytics Peaker'
@@ -366,11 +373,67 @@ def func(symbol, strikes, xaxis, yaxis):
     #dt = pytz.timezone("US/Eastern").localize(datetime.datetime(2023, 5, 19, 11, 0))
     #app.logger.info(f'pc_summary << dt={dt}')
     #dfx = df[(df.processDateTime < dt)]
-
     state, fig_summary = chart_pc_summary(df, strikes, yaxis, xaxis, title=symbol)
     state['symbol'] = symbol
     return state, fig_summary
 
+@app.callback(
+    Output("strike-volume", "figure"),
+    Output("strike-volume-right", "figure"),
+    Input('pc-summary-interval','n_intervals'), 
+    Input("symbol", "value"),
+)
+def func(n, symbol):
+    df = app.OptionQuotes[symbol].reload()
+    df['sma5'] = df.volume.rolling(5).mean().round(2)
+    df['sma15'] = df.volume.rolling(10).mean().round(2)
+    df['underlyingVolume'] = df.totalVolume.abs().max()
+
+    max_dt = pd.to_datetime('2023-05-31 11:30:00-04:00')
+    max_dt = df.processDateTime.max()
+    df = df[(df.processDateTime == max_dt)]
+
+    df.loc[df['putCall'] == 'CALL', 'underlyingVolume'] *= -1
+    df.loc[df['putCall'] == 'CALL', 'totalVolume'] *= -1
+    df.loc[df['putCall'] == 'CALL', 'volume'] *= -1
+    df.loc[df['putCall'] == 'CALL', 'sma5'] *= -1
+    df.loc[df['putCall'] == 'CALL', 'sma15'] *= -1
+    underlyingVolume = df.totalVolume.abs().max()
+    underlyingPrice = df.underlyingPrice.abs().max()
+
+
+    fig = go.Figure(layout=go.Layout(title=go.layout.Title(text=f"Total Volume {max_dt}"), barmode='overlay'))
+    fig.update_layout(barmode='overlay',         yaxis_title='Strike Price',    )
+    fig.update_layout(legend=dict(yanchor="bottom", y=0.9, xanchor="right", x=1, orientation="h",))
+    fig.update_yaxes(autorange="reversed")
+
+    #fig.add_trace(go.Bar(x=df.underlyingVolume, y=df.underlyingPrice, name='SPX', width=0.75, orientation='h', marker_color='lightslategray'), 1, 1)
+    spx_bar = go.Bar(x=[-underlyingVolume, underlyingVolume], y=[underlyingPrice,underlyingPrice] , name='SPX', width=2.0, orientation='h', marker_color='red')
+    fig.add_trace(spx_bar)
+
+    puts = df[(df.putCall == 'PUT')]
+    fig.add_trace(go.Bar(x=puts.totalVolume, y=puts.strikePrice, name='puts', orientation='h', marker_color='rgb(55, 83, 109)', ))
+    calls = df[(df.putCall == 'CALL')]
+    fig.add_trace(go.Bar(x=calls.totalVolume, y=calls.strikePrice, name='calls', orientation='h', marker_color='rgb(26, 118, 255)', ))
+
+    fig2 = go.Figure(layout=go.Layout(title=go.layout.Title(text="Prior One Minute Volume (mark over 0.50 and less than shity avg vol)"), barmode='overlay'))
+    fig2.update_layout(legend=dict(yanchor="bottom", y=1.05, xanchor="right", x=1, orientation="h",))
+    fig2.update_yaxes(autorange="reversed")
+
+    underlyingVolume = df.volume.abs().max()
+    spx_bar = go.Bar(x=[-underlyingVolume, underlyingVolume], y=[underlyingPrice,underlyingPrice] , name='SPX', width=2.5, orientation='h', marker_color='crimson')
+    fig2.add_trace(spx_bar)
+
+    df = df[(df.mark > 0.44) & (df.sma5.abs() > 10)]
+    puts = df[(df.putCall == 'PUT')]
+    calls = df[(df.putCall == 'CALL')]
+    fig2.add_trace(go.Bar(x=puts.volume, y=puts.strikePrice, name='puts', orientation='h', marker_color='rgb(55, 83, 109)', ))
+    fig2.add_trace(go.Bar(x=calls.volume, y=calls.strikePrice, name='calls', orientation='h', marker_color='rgb(26, 118, 255)', ))
+    fig2.add_trace(go.Scatter(x=df.sma5, y=df.strikePrice, name='sma5', mode='markers', orientation='h', marker_color='indianred', ))
+    fig2.add_trace(go.Scatter(x=df.sma15, y=df.strikePrice, name='sma15', mode='markers', orientation='h', marker_color='lightsalmon', ))
+    #fig.add_trace(go.Scattergl(x=x, y=y, customdata=cd, name=s, text=s, mode='markers', hovertemplate=hovertemplate), secondary_y=False,)
+
+    return fig, fig2
 
 if __name__ == '__main__':
     app.run_server(debug=True, host='0.0.0.0')
