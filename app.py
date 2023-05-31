@@ -151,19 +151,17 @@ def dash_layout():
                 className="menu",
             ),
             html.Div(id='strikes-selector-div', className="card"),
+            html.Div([
+                dbc.Col(dcc.Graph(id="strike-volume", config={"displayModeBar": False}), style= {'width': '49%', 'display': 'inline-block'}),
+                dbc.Col(dcc.Graph(id="strike-volume-right", config={"displayModeBar": False}), style= {'width': '49%', 'display': 'inline-block'}),
+            ]),
 
             html.Div(deg.ExtendableGraph(id="pc-summary-graph", config={"displayModeBar": False}), className="card",),
             dcc.Interval(id='pc-summary-interval', interval=interval*1000, disabled=intervalDisabled),
             dcc.Store(id="pc-summary-store", data=None, modified_timestamp=0),
 
-            html.Div(deg.ExtendableGraph(id="pc-volume-graph", config={"displayModeBar": False}, className="card")),
-            dcc.Interval(id='pc-volume-interval', interval=interval*1000, disabled=intervalDisabled),
-            html.Div([
-                html.Span([
-                dcc.Graph(id="strike-volume", config={"displayModeBar": False}, style = {'float':'left', 'width':'49%'},),
-                dcc.Graph(id="strike-volume-right", config={"displayModeBar": False}, style = {'float':'right', 'width':'49%'},),
-                ]),
-                ], className='card'),
+            # html.Div(deg.ExtendableGraph(id="pc-volume-graph", config={"displayModeBar": False}, className="card")),
+            # dcc.Interval(id='pc-volume-interval', interval=interval*1000, disabled=intervalDisabled),
         ])
 
 # ====================================================================
@@ -385,8 +383,9 @@ def func(symbol, strikes, xaxis, yaxis):
 )
 def func(n, symbol):
     df = app.OptionQuotes[symbol].reload()
+    df.sort_values(['symbol', 'processDateTime'], inplace=True)
     df['sma5'] = df.volume.rolling(5).mean().round(2)
-    df['sma15'] = df.volume.rolling(10).mean().round(2)
+    df['sma15'] = df.volume.rolling(15).mean().round(2)
     df['underlyingVolume'] = df.totalVolume.abs().max()
 
     max_dt = pd.to_datetime('2023-05-31 11:30:00-04:00')
@@ -401,14 +400,13 @@ def func(n, symbol):
     underlyingVolume = df.totalVolume.abs().max()
     underlyingPrice = df.underlyingPrice.abs().max()
 
-
-    fig = go.Figure(layout=go.Layout(title=go.layout.Title(text=f"Total Volume {max_dt}"), barmode='overlay'))
+    fig = go.Figure(layout=go.Layout(title=go.layout.Title(text=f"Total Volume for Twoday {max_dt.strftime('%Y-%m-%d %H:%M')}"), barmode='overlay'))
     fig.update_layout(barmode='overlay',         yaxis_title='Strike Price',    )
-    fig.update_layout(legend=dict(yanchor="bottom", y=0.9, xanchor="right", x=1, orientation="h",))
+    fig.update_layout(legend=dict(yanchor="bottom", y=1.05, xanchor="right", x=1, orientation="h",))
     fig.update_yaxes(autorange="reversed")
 
     #fig.add_trace(go.Bar(x=df.underlyingVolume, y=df.underlyingPrice, name='SPX', width=0.75, orientation='h', marker_color='lightslategray'), 1, 1)
-    spx_bar = go.Bar(x=[-underlyingVolume, underlyingVolume], y=[underlyingPrice,underlyingPrice] , name='SPX', width=2.0, orientation='h', marker_color='red')
+    spx_bar = go.Bar(x=[-underlyingVolume, underlyingVolume], y=[underlyingPrice,underlyingPrice] , name='SPX', width=3.0, orientation='h', marker_color='red')
     fig.add_trace(spx_bar)
 
     puts = df[(df.putCall == 'PUT')]
@@ -430,7 +428,8 @@ def func(n, symbol):
     fig2.add_trace(go.Bar(x=puts.volume, y=puts.strikePrice, name='puts', orientation='h', marker_color='rgb(55, 83, 109)', ))
     fig2.add_trace(go.Bar(x=calls.volume, y=calls.strikePrice, name='calls', orientation='h', marker_color='rgb(26, 118, 255)', ))
     fig2.add_trace(go.Scatter(x=df.sma5, y=df.strikePrice, name='sma5', mode='markers', orientation='h', marker_color='indianred', ))
-    fig2.add_trace(go.Scatter(x=df.sma15, y=df.strikePrice, name='sma15', mode='markers', orientation='h', marker_color='lightsalmon', ))
+    fig2.add_trace(go.Bar(x=df.sma5, y=df.strikePrice, orientation='h', width=1, marker_color='indianred', showlegend=False,))
+    fig2.add_trace(go.Scatter(x=df.sma15, y=df.strikePrice, name='sma15', mode='markers', orientation='h', marker_color='black', ))
     #fig.add_trace(go.Scattergl(x=x, y=y, customdata=cd, name=s, text=s, mode='markers', hovertemplate=hovertemplate), secondary_y=False,)
 
     return fig, fig2
