@@ -67,7 +67,7 @@ def get_files():
         if match:
             key = match.group(1)
             file_dict[key] = filename
-    keys = sorted(file_dict.keys(), reverse=True)[:5]
+    keys = sorted(file_dict.keys(), reverse=True)[:20]
     file_dict = {key: value for key, value in file_dict.items() if key in keys}
     return file_dict
 
@@ -374,6 +374,10 @@ def func(symbol, strikes, xaxis, yaxis, intervalDisabled):
 def func(n, symbol):
     df = app.OptionQuotes[symbol].reload()
     df.sort_values(['symbol', 'processDateTime'], inplace=True)
+    s = df['mark'].diff()
+    s[df.symbol != df.symbol.shift(1)] = np.nan
+    df['mark_diff'] = s
+
     df['sma5'] = df.volume.rolling(5).mean().round(2)
     df['sma15'] = df.volume.rolling(15).mean().round(2)
     df['underlyingVolume'] = df.totalVolume.abs().max()
@@ -402,9 +406,9 @@ def func(n, symbol):
     fig.add_hline(y=underlyingPrice, line_color='crimson', line_dash='dot', annotation_text='SPX')
 
     puts = df[(df.putCall == 'PUT')]
-    fig.add_trace(go.Bar(x=puts.totalVolume, y=puts.strikePrice, name='puts', orientation='h', marker_color='rgb(55, 83, 109)', ))
     calls = df[(df.putCall == 'CALL')]
     fig.add_trace(go.Bar(x=calls.totalVolume, y=calls.strikePrice, name='calls', orientation='h', marker_color='rgb(26, 118, 255)', ))
+    fig.add_trace(go.Bar(x=puts.totalVolume, y=puts.strikePrice, name='puts', orientation='h', marker_color='rgb(55, 83, 109)', ))
 
     fig2 = go.Figure(layout=go.Layout(title=go.layout.Title(text="Prior One Minute Volume (mark over 0.50 and less than shity avg vol)"), barmode='overlay'))
     fig2.update_layout(legend=dict(yanchor="bottom", y=1.05, xanchor="right", x=1, orientation="h",), template='plotly_dark')
@@ -414,14 +418,14 @@ def func(n, symbol):
     spx_bar = go.Bar(x=[-underlyingVolume, underlyingVolume], y=[underlyingPrice,underlyingPrice] , name='SPX', width=2.5, orientation='h', marker_color='crimson')
     #fig2.add_trace(spx_bar)
     fig2.add_vline(x=0, line_color='black')
-    fig2.add_hline(y=underlyingPrice, line_color='crimson', line_dash='dot', annotation_text='SPX')
+    fig2.add_hline(y=underlyingPrice, line_color='crimson', line_dash='dot', annotation_text=f'SPX {int(underlyingPrice)}')
     #fig2.add_shape(type='line', name='foo', line_color='crimson', line_width=3, line_dash='dot', x0=0,x1=1,xref='paper', y0=underlyingPrice,y1=underlyingPrice,yref='y')
 
     df = df[(df.mark > 0.44) & (df.sma5.abs() > 10)]
     puts = df[(df.putCall == 'PUT')]
     calls = df[(df.putCall == 'CALL')]
-    fig2.add_trace(go.Bar(x=puts.volume, y=puts.strikePrice, name='puts', orientation='h', marker_color='rgb(55, 83, 109)', ))
     fig2.add_trace(go.Bar(x=calls.volume, y=calls.strikePrice, name='calls', orientation='h', marker_color='rgb(26, 118, 255)', ))
+    fig2.add_trace(go.Bar(x=puts.volume, y=puts.strikePrice, name='puts', orientation='h', marker_color='rgb(55, 83, 109)', ))
     #fig2.add_trace(go.Scatter(x=df.sma5, y=df.strikePrice, name='sma5', mode='markers', orientation='h', marker_color='indianred', marker_symbol='diamond' ))
     fig2.add_trace(go.Bar(x=df.sma5, y=df.strikePrice, name='sma5', orientation='h', width=1, marker_color='indianred', showlegend=True,))
     fig2.add_trace(go.Scatter(x=df.sma15, y=df.strikePrice, name='sma15', mode='markers', orientation='h',
@@ -431,9 +435,11 @@ def func(n, symbol):
     m1 = (df.volume < df.sma5) & (df.sma5 < df.sma15) & (df.volume < 0)
     dfx = df.loc[(m0) | (m1)]
     for index, row in dfx.iterrows():
+        action = 'Buy' if row.mark_diff > 0 else 'Sell'
         fig2.add_annotation(
-            text="Dick move!", x=row.volume, y=row.strikePrice, arrowhead=1, showarrow=True
+            text=f"Dick {action} {row.strikePrice:.0f}@{row.mark:.2f}", x=row.volume, y=row.strikePrice, arrowhead=1, showarrow=True
         )
+
     return fig, fig2
 
 if __name__ == '__main__':
