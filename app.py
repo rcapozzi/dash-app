@@ -38,29 +38,20 @@ def seconds_to_monday():
         app.logger.info(f'seconds_to_monday ! {e}')
     return int(time_difference)
 
-def is_market_closed():
-    from datetime import datetime, time
-    rv = False
-    try:
+def is_market_open():
+        from datetime import datetime, time
         current_time = datetime.now().astimezone(pytz.timezone('US/Eastern'))
         current_day = current_time.weekday()
-        if (
-            (current_day == 4 and current_time.time() >= time(16))  # Friday after 4 pm
-            or (current_day == 5)                                 # Saturday
-            or (current_day == 6)                                 # Sunday
-            or (current_day == 0 and current_time.time() <= time(9, 30))  # Monday before 9:30 am
-        ):
-            rv = True
         if (
             current_day >= 0 and current_day <= 4   # Monday to Friday
             and current_time.time() >= time(9, 30)         # After 9:30 am
             and current_time.time() <= time(16)            # Before or at 4 pm
         ):
-            rv = False
-    except Exception as e:
-        app.logger.info(f'is_market_closed ! {e}')
-
-    return rv
+            return True
+        else:
+            return False
+def is_market_closed():
+    return not is_market_open()
 
 def calc_interval():
     if is_market_closed():
@@ -70,7 +61,6 @@ def calc_interval():
 
 def get_files():
     file_dict = {}
-    #for filename in os.listdir('../tda-tbd/data/*.parquet'):
     for filename in glob.glob('../tda-tbd/data/*.parquet'):
         filename = filename.replace('\\', '/')
         match = re.search(r"([^/]+)\.parquet$", filename)
@@ -87,20 +77,12 @@ def dash_layout():
 
     app.OptionQuotes = {}
     try:
-        # for s in symbols:
-        #     yyyymmdd = datetime.datetime.today().strftime('%Y-%m-%d')
-        #     filename = f'data/{s}.{yyyymmdd}.parquet'
-        #     if os.path.isfile(filename):
-        #         app.OptionQuotes[s] = OptionQuotes(symbol=s,filename=filename)
-
         files = get_files()
         for k, v in files.items():
-            # app.logger.info(f'files k={k} v={v}')
             app.OptionQuotes[k] = OptionQuotes(symbol=k,filename=v)
             app.OptionQuotes[k].data.file_label = k
         symbols += sorted(files.keys(), reverse=True)
         symbols = sorted(app.OptionQuotes.keys(), reverse=True)
-
     except Exception as e:
         return html.Div([
             html.Hr(),
@@ -152,11 +134,11 @@ def dash_layout():
             ),
             html.Div(id='strikes-selector-div', className="card"),
             html.Div([
-                dbc.Col(dcc.Graph(id="strike-volume", config={"displayModeBar": False}), style= {'width': '49%', 'display': 'inline-block'}),
-                dbc.Col(dcc.Graph(id="strike-volume-right", config={"displayModeBar": False}), style= {'width': '49%', 'display': 'inline-block'}),
+                dbc.Col(dcc.Graph(id="strike-volume", config={"displayModeBar": False}), style= {'width': '49%', 'display': 'inline-block'}, class_name='card'),
+                dbc.Col(dcc.Graph(id="strike-volume-right", config={"displayModeBar": False}), style= {'width': '49%', 'display': 'inline-block'}, className='card'),
             ]),
 
-            html.Div(deg.ExtendableGraph(id="pc-summary-graph", config={"displayModeBar": False}), className="card",),
+            html.Div(deg.ExtendableGraph(id="pc-summary-graph", config={"displayModeBar": False}), className="card"),
             dcc.Interval(id='pc-summary-interval', interval=interval*1000, disabled=intervalDisabled),
             dcc.Store(id="pc-summary-store", data=None, modified_timestamp=0),
 
@@ -358,22 +340,30 @@ def func(n_interval, cookie):
     return cookie, updates, c0, c1
 
 @app.callback(
+    Output("pc-summary-interval", "disabled"),
     Output("pc-summary-store", "data"),
     Output("pc-summary-graph", "figure"),
     Input("symbol", "value"),
     Input("strikes-rangeslider", "value"),
     Input("x-axis", "value"),
     Input("y-axis", "value"),
+    Input("pc-summary-interval", "disabled"),
     prevent_initial_call=True
 )
-def func(symbol, strikes, xaxis, yaxis):
+def func(symbol, strikes, xaxis, yaxis, intervalDisabled):
+    if 'symbol.value' in ctx.triggered_prop_ids:
+        app.logger.info(f'pc_summary << new symbol {symbol}')
+        date_string = symbol.split(".")[-1]
+        today = datetime.datetime.now(pytz.timezone('US/Eastern')).strftime('%Y-%m-%d')
+        if date_string == today and is_market_open():
+            intervalDisabled = False
+
     df = app.OptionQuotes[symbol].reload()
     #dt = pytz.timezone("US/Eastern").localize(datetime.datetime(2023, 5, 19, 11, 0))
-    #app.logger.info(f'pc_summary << dt={dt}')
     #dfx = df[(df.processDateTime < dt)]
     state, fig_summary = chart_pc_summary(df, strikes, yaxis, xaxis, title=symbol)
     state['symbol'] = symbol
-    return state, fig_summary
+    return intervalDisabled, state, fig_summary
 
 @app.callback(
     Output("strike-volume", "figure"),
@@ -407,7 +397,9 @@ def func(n, symbol):
 
     #fig.add_trace(go.Bar(x=df.underlyingVolume, y=df.underlyingPrice, name='SPX', width=0.75, orientation='h', marker_color='lightslategray'), 1, 1)
     spx_bar = go.Bar(x=[-underlyingVolume, underlyingVolume], y=[underlyingPrice,underlyingPrice] , name='SPX', width=3.0, orientation='h', marker_color='red')
-    fig.add_trace(spx_bar)
+    #fig.add_trace(spx_bar)
+    fig.add_vline(x=0, line_color='black')
+    fig.add_hline(y=underlyingPrice, line_color='crimson', line_dash='dot', annotation_text='SPX')
 
     puts = df[(df.putCall == 'PUT')]
     fig.add_trace(go.Bar(x=puts.totalVolume, y=puts.strikePrice, name='puts', orientation='h', marker_color='rgb(55, 83, 109)', ))
@@ -415,23 +407,33 @@ def func(n, symbol):
     fig.add_trace(go.Bar(x=calls.totalVolume, y=calls.strikePrice, name='calls', orientation='h', marker_color='rgb(26, 118, 255)', ))
 
     fig2 = go.Figure(layout=go.Layout(title=go.layout.Title(text="Prior One Minute Volume (mark over 0.50 and less than shity avg vol)"), barmode='overlay'))
-    fig2.update_layout(legend=dict(yanchor="bottom", y=1.05, xanchor="right", x=1, orientation="h",))
+    fig2.update_layout(legend=dict(yanchor="bottom", y=1.05, xanchor="right", x=1, orientation="h",), template='plotly_dark')
     fig2.update_yaxes(autorange="reversed")
 
     underlyingVolume = df.volume.abs().max()
     spx_bar = go.Bar(x=[-underlyingVolume, underlyingVolume], y=[underlyingPrice,underlyingPrice] , name='SPX', width=2.5, orientation='h', marker_color='crimson')
-    fig2.add_trace(spx_bar)
+    #fig2.add_trace(spx_bar)
+    fig2.add_vline(x=0, line_color='black')
+    fig2.add_hline(y=underlyingPrice, line_color='crimson', line_dash='dot', annotation_text='SPX')
+    #fig2.add_shape(type='line', name='foo', line_color='crimson', line_width=3, line_dash='dot', x0=0,x1=1,xref='paper', y0=underlyingPrice,y1=underlyingPrice,yref='y')
 
     df = df[(df.mark > 0.44) & (df.sma5.abs() > 10)]
     puts = df[(df.putCall == 'PUT')]
     calls = df[(df.putCall == 'CALL')]
     fig2.add_trace(go.Bar(x=puts.volume, y=puts.strikePrice, name='puts', orientation='h', marker_color='rgb(55, 83, 109)', ))
     fig2.add_trace(go.Bar(x=calls.volume, y=calls.strikePrice, name='calls', orientation='h', marker_color='rgb(26, 118, 255)', ))
-    fig2.add_trace(go.Scatter(x=df.sma5, y=df.strikePrice, name='sma5', mode='markers', orientation='h', marker_color='indianred', ))
-    fig2.add_trace(go.Bar(x=df.sma5, y=df.strikePrice, orientation='h', width=1, marker_color='indianred', showlegend=False,))
-    fig2.add_trace(go.Scatter(x=df.sma15, y=df.strikePrice, name='sma15', mode='markers', orientation='h', marker_color='black', ))
-    #fig.add_trace(go.Scattergl(x=x, y=y, customdata=cd, name=s, text=s, mode='markers', hovertemplate=hovertemplate), secondary_y=False,)
-
+    #fig2.add_trace(go.Scatter(x=df.sma5, y=df.strikePrice, name='sma5', mode='markers', orientation='h', marker_color='indianred', marker_symbol='diamond' ))
+    fig2.add_trace(go.Bar(x=df.sma5, y=df.strikePrice, name='sma5', orientation='h', width=1, marker_color='indianred', showlegend=True,))
+    fig2.add_trace(go.Scatter(x=df.sma15, y=df.strikePrice, name='sma15', mode='markers', orientation='h',
+            marker=dict(size=12, symbol="line-ns", line=dict(width=2, color="pink"))
+        ))
+    m0 = (df.volume > df.sma5) & (df.sma5 > df.sma15) & (df.volume > 0)
+    m1 = (df.volume < df.sma5) & (df.sma5 < df.sma15) & (df.volume < 0)
+    dfx = df.loc[(m0) | (m1)]
+    for index, row in dfx.iterrows():
+        fig2.add_annotation(
+            text="Dick move!", x=row.volume, y=row.strikePrice, arrowhead=1, showarrow=True
+        )
     return fig, fig2
 
 if __name__ == '__main__':
