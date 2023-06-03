@@ -74,16 +74,22 @@ class OptionQuotes:
 
     def post_load_data(self):
         df = self.data
-
         df.sort_values(['symbol', 'processDateTime'], inplace=True)
+
         vol = df['totalVolume'].diff()
         vol[df.symbol != df.symbol.shift(1)] = np.nan
         vol[vol < 5] = 0
         df['volume'] = vol
 
+        s = df['mark'].diff()
+        s[df.symbol != df.symbol.shift(1)] = np.nan
+        df['mark_diff'] = s.round(2)
+        df['netVolume'] = np.sign(df['mark_diff']) * df['volume']
+
         df['underlyingPrice'] = df.underlyingPrice.round(0)
-        df['distance'] = (df['strikePrice'] - df['underlyingPrice']).apply(lambda x: round(x / 10) * 10)        
+        df['distance'] = (df['strikePrice'] - df['underlyingPrice']).apply(lambda x: round(x / 10) * 10)
         df['markVol'] = round(df.mark * df.volume,0)
+
         df['gexVol'] = (df.mark * df.volume * df.gamma).round(0)
 
         # df['sma5'] = df.mark.rolling(5).mean().round(2)

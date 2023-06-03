@@ -17,7 +17,6 @@ import pytz
 import dash
 from dash import Dash, html, dcc, Output, Input, State, dash_table, ctx
 import dash_bootstrap_components as dbc
-import logging
 from utils import OptionQuotes
 import dash_extendable_graph as deg
 import glob
@@ -351,7 +350,7 @@ def func(n_interval, cookie):
     Input("strikes-rangeslider", "value"),
     Input("x-axis", "value"),
     Input("y-axis", "value"),
-    Input("pc-summary-interval", "disabled"),
+    State("pc-summary-interval", "disabled"),
     prevent_initial_call=True
 )
 def func(symbol, strikes, xaxis, yaxis, intervalDisabled):
@@ -377,14 +376,10 @@ def func(symbol, strikes, xaxis, yaxis, intervalDisabled):
 )
 def func(n, symbol):
     df = app.OptionQuotes[symbol].reload()
-    df.sort_values(['symbol', 'processDateTime'], inplace=True)
-    s = df['mark'].diff()
-    s[df.symbol != df.symbol.shift(1)] = np.nan
-    df['mark_diff'] = s
+    df = df.sort_values(['symbol', 'processDateTime'])
 
     df['sma5'] = df.volume.rolling(5).mean().round(2)
     df['sma15'] = df.volume.rolling(15).mean().round(2)
-    df['underlyingVolume'] = df.totalVolume.abs().max()
 
     max_dt = pd.to_datetime('2023-05-31 11:30:00-04:00')
     max_dt = df.processDateTime.max()
@@ -393,19 +388,17 @@ def func(n, symbol):
     # dfg = df.groupby('symbol').agg({'netVolume':'sum'})
     # dfg = dfg.rename(columns={'netVolume': 'cumNetVolume'})
     # df = pd.merge(df, dfg, on='symbol')
-    df = df[(df.processDateTime == max_dt)]
 
-    #df.loc[df['putCall'] == 'CALL', 'cumNetVolume'] *= -1
-    df.loc[df['putCall'] == 'CALL', 'underlyingVolume'] *= -1
     df.loc[df['putCall'] == 'CALL', 'totalVolume'] *= -1
     df.loc[df['putCall'] == 'CALL', 'volume'] *= -1
     df.loc[df['putCall'] == 'CALL', 'sma5'] *= -1
     df.loc[df['putCall'] == 'CALL', 'sma15'] *= -1
-    underlyingVolume = df.totalVolume.abs().max()
+    df_base = df.copy()
+    df = df[(df.processDateTime == max_dt)]
     underlyingPrice = df.underlyingPrice.abs().max()
 
     fig = go.Figure(layout=go.Layout(title=go.layout.Title(text=f"Total Volume for Twoday {dt}"), barmode='overlay'))
-    fig.update_layout(barmode='overlay',         yaxis_title='Strike Price',    )
+    fig.update_layout(barmode='overlay', yaxis_title='Strike Price', )
     fig.update_layout(legend=dict(yanchor="bottom", y=1.05, xanchor="right", x=1, orientation="h",))
     fig.update_yaxes(autorange="reversed")
 
@@ -417,39 +410,60 @@ def func(n, symbol):
     calls = df[(df.putCall == 'CALL')]
     fig.add_trace(go.Bar(x=calls[xaxis], y=calls.strikePrice, name='calls', orientation='h', marker_color='rgb(26, 118, 255)', ))
     fig.add_trace(go.Bar(x=puts[xaxis], y=puts.strikePrice, name='puts', orientation='h', marker_color='rgb(55, 83, 109)', ))
+    # NOTE: Does not work with reversed.
+    # ymax = max(calls[xaxis].abs().max(), puts[xaxis].abs().max() )
+    # fig.update_yaxes(range=[-ymax, ymax])
 
     # Figure 2
     fig2 = go.Figure(layout=go.Layout(title=go.layout.Title(text=f"Prior One Minute Volume (mark over 0.50 & sma5 vol > 10) {dt}"), barmode='overlay'))
     fig2.update_layout(legend=dict(yanchor="bottom", y=1.05, xanchor="right", x=1, orientation="h",), template='plotly_dark')
     fig2.update_yaxes(autorange="reversed")
 
-    underlyingVolume = df.volume.abs().max()
-    spx_bar = go.Bar(x=[-underlyingVolume, underlyingVolume], y=[underlyingPrice,underlyingPrice] , name='SPX', width=2.5, orientation='h', marker_color='crimson')
-    #fig2.add_trace(spx_bar)
     fig2.add_vline(x=0, line_color='yellow')
     fig2.add_hline(y=underlyingPrice, line_color='crimson', line_dash='dot', annotation_text=f'SPX {int(underlyingPrice)}')
-    #fig2.add_shape(type='line', name='foo', line_color='crimson', line_width=3, line_dash='dot', x0=0,x1=1,xref='paper', y0=underlyingPrice,y1=underlyingPrice,yref='y')
 
-    df = df[(df.mark > 0.44) & (df.sma5.abs() > 10)]
-    puts = df[(df.putCall == 'PUT')]
-    calls = df[(df.putCall == 'CALL')]
-    fig2.add_trace(go.Bar(x=calls.volume, y=calls.strikePrice, name='calls', orientation='h', marker_color='rgb(26, 118, 255)', ))
-    fig2.add_trace(go.Bar(x=puts.volume, y=puts.strikePrice, name='puts', orientation='h', marker_color='rgb(55, 83, 109)', ))
-    fig2.add_trace(go.Bar(x=df.sma5, y=df.strikePrice, name='sma5', orientation='h', width=1, marker_color='indianred', showlegend=True,))
-    fig2.add_trace(go.Scatter(x=df.sma15, y=df.strikePrice, name='sma15', mode='markers', orientation='h',
-            marker=dict(size=12, symbol="line-ns", line=dict(width=2, color="pink"))
-        ))
     m0 = (df.volume > df.sma5) & (df.sma5 > df.sma15) & (df.volume > 0)
     m1 = (df.volume < df.sma5) & (df.sma5 < df.sma15) & (df.volume < 0)
     dfx = df.loc[(m0) | (m1)]
     for index, row in dfx.iterrows():
         action = 'Buy' if row.mark_diff > 0 else 'Sell'
-        fig2.add_annotation(
-            text=f"{action} {row.strikePrice:.0f}@{row.mark:.2f}", x=row.volume, y=row.strikePrice, arrowhead=1, showarrow=True
-        )
+        fig2.add_annotation(text=f"{action} {row.strikePrice:.0f}@{row.mark:.2f}", x=row.volume, y=row.strikePrice, arrowhead=1, showarrow=True)
 
-    app.logger.info(fig2)
+    df_base_mask = (df_base.mark > 0.44) & (df_base.sma5.abs() > 10)
+    unique_dates = df_base['processDateTime'].sort_values().unique().tolist()[-5:]
+    frames = []
+    for max_dt in unique_dates:
+        data = []
+        dt = max_dt.strftime('%Y-%m-%d %H:%M')
+        df = df_base[(df_base.processDateTime == max_dt) & df_base_mask]
+        puts = df[(df.putCall == 'PUT')]
+        calls = df[(df.putCall == 'CALL')]
+        data.append(go.Bar(x=calls.volume, y=calls.strikePrice, name='calls', orientation='h', marker_color='rgb(26, 118, 255)', ))
+        data.append(go.Bar(x=puts.volume, y=puts.strikePrice, name='puts', orientation='h', marker_color='rgb(55, 83, 109)', ))
+        data.append(go.Bar(x=df.sma5, y=df.strikePrice, name='sma5', orientation='h', width=1, marker_color='indianred', showlegend=True,))
+        data.append(go.Scatter(x=df.sma15, y=df.strikePrice, name='sma15', mode='markers', orientation='h',
+                marker=dict(size=12, symbol="line-ns", line=dict(width=2, color="pink"))
+            ))
+        frames.append({'data': data, 'name': dt})
+
+    [fig2.add_trace(trace) for trace in frames[-1]['data']]
+    dict2 = fig2.to_dict()
+    xaxis = 'volume'
+    xmax = max(calls[xaxis].abs().max(), puts[xaxis].abs().max() )
+    xmax = math.ceil(xmax / 100) * 100 + 100
+    fig.update_yaxes(range=[-xmax, xmax])
+    dict2['layout']['xaxis'] = {"range": [-xmax, xmax], 'title': xaxis }
+    dict2['layout']['updatemenus'] = [dict(type="buttons", font={'color':'black'}, buttons=[dict(label="WTF", method="animate", args=[None])])]
+    dict2['frames'] = [ f for f in frames ]
+    fig2 = go.Figure(dict2)
+    # app.logger.info(f'Made fig {datetime.datetime.now()}')
+
     return fig, fig2
+
+def minmax(s):
+    min, max = s.min(), s.max()
+
+    return [min, max]
 
 if __name__ == '__main__':
     app.run_server(debug=True, host='0.0.0.0')
