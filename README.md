@@ -97,3 +97,19 @@ def func(n, symbol):
     app.logger.info(f'pc-volume-graph >> n={n} max_dt={max_dt} data={data[-60:]}')
         
     return [n, data]
+
+
+import pandas as pd
+from utils import OptionQuotes
+oq = OptionQuotes(symbol='abc',filename='../tda-tbd/data/SPX.X.2023-06-01.parquet')
+df = oq.data
+
+
+df.sort_values(['symbol', 'processDateTime'], inplace=True)
+s = df['mark'].diff()
+s[df.symbol != df.symbol.shift(1)] = np.nan
+df['mark_diff'] = s
+
+dfg = df.groupby('symbol').agg({'netVolume':'sum'})
+dfg = dfg.rename(columns={'netVolume': 'cumNetVolume'})
+df = pd.merge(df, dfg, on='symbol')
