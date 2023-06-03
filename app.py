@@ -16,6 +16,8 @@ import math
 import pytz
 import dash
 from dash import Dash, html, dcc, Output, Input, State, dash_table, ctx
+import dash_mantine_components as dmc
+from dash_iconify import DashIconify
 import dash_bootstrap_components as dbc
 from utils import OptionQuotes
 import dash_extendable_graph as deg
@@ -91,10 +93,10 @@ def dash_layout():
 
     xfields = [ 'processDateTime', 'strikePrice']#, 'underlyingPrice', 'strikePrice']
     yfields = [ 'volume', 'markVol', 'distance', 'totalVolume', 'netVolume', 'mark'] #, 'markVol', 'gexVol', 'mark', 'totalVolume', 'delta' ]
-    intervalDisabled = is_market_closed()
+    intervalDisabled = True # is_market_closed()
     interval = 60
 
-    return html.Div([
+    content = html.Div([
             dbc.Alert(id='alerts'),
             #html.H1(children="SPX 0DTE Option Chain Analytics"),
             html.Hr(),
@@ -144,10 +146,12 @@ def dash_layout():
                 dcc.Interval(id='pc-summary-interval', interval=interval*1000, disabled=intervalDisabled),
             ], type = 'default'),
             dcc.Store(id="pc-summary-store", data=None, modified_timestamp=0),
-
+            html.Div(id="notify-container"),
             # html.Div(deg.ExtendableGraph(id="pc-volume-graph", config={"displayModeBar": False}, className="card")),
             # dcc.Interval(id='pc-volume-interval', interval=interval*1000, disabled=intervalDisabled),
         ])
+    return dmc.MantineProvider(dmc.NotificationsProvider([content]))
+
 
 # ====================================================================
 
@@ -343,6 +347,7 @@ def func(n_interval, cookie):
     return cookie, updates, c0, c1
 
 @app.callback(
+    Output("notify-container", "children"),
     Output("pc-summary-interval", "disabled"),
     Output("pc-summary-store", "data"),
     Output("pc-summary-graph", "figure"),
@@ -354,19 +359,22 @@ def func(n_interval, cookie):
     prevent_initial_call=True
 )
 def func(symbol, strikes, xaxis, yaxis, intervalDisabled):
-    if 'symbol.value' in ctx.triggered_prop_ids:
-        app.logger.info(f'pc_summary << new symbol {symbol}')
-        date_string = symbol.split(".")[-1]
-        today = datetime.datetime.now(pytz.timezone('US/Eastern')).strftime('%Y-%m-%d')
-        if date_string == today and is_market_open():
-            intervalDisabled = False
-
+    # notification = None
+    # app.logger.info(f'pc_summary << symbol={symbol}')
+    # if 'symbol.value' in ctx.triggered_prop_ids:
+    date_string = symbol.split(".")[-1]
+    today = datetime.datetime.now(pytz.timezone('US/Eastern')).strftime('%Y-%m-%d')
+    intervalDisabled = False if date_string == today and is_market_open() else True
+    s = "disabled" if intervalDisabled else "enabled"
+    icon="ic:round-celebration"
+    icon="mdi:gun"
+    notification = dmc.Notification(id="my-notification", message=f"Updates {s} for {symbol}", color="green", action="show", icon=DashIconify(icon=icon),autoClose=5_000)
     df = app.OptionQuotes[symbol].reload()
     #dt = pytz.timezone("US/Eastern").localize(datetime.datetime(2023, 5, 19, 11, 0))
     #dfx = df[(df.processDateTime < dt)]
     state, fig_summary = chart_pc_summary(df, strikes, yaxis, xaxis, title=symbol)
     state['symbol'] = symbol
-    return intervalDisabled, state, fig_summary
+    return notification, intervalDisabled, state, fig_summary
 
 @app.callback(
     Output("strike-volume", "figure"),
@@ -453,7 +461,7 @@ def func(n, symbol):
     xmax = math.ceil(xmax / 100) * 100 + 100
     fig.update_yaxes(range=[-xmax, xmax])
     dict2['layout']['xaxis'] = {"range": [-xmax, xmax], 'title': xaxis }
-    dict2['layout']['updatemenus'] = [dict(type="buttons", font={'color':'black'}, buttons=[dict(label="WTF", method="animate", args=[None])])]
+    dict2['layout']['updatemenus'] = [dict(type="buttons", font={'color':'black'}, buttons=[dict(label="last5", method="animate", args=[None])])]
     dict2['frames'] = [ f for f in frames ]
     fig2 = go.Figure(dict2)
     # app.logger.info(f'Made fig {datetime.datetime.now()}')
