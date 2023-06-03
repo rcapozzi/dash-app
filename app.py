@@ -105,6 +105,16 @@ def dash_layout():
                 html.Div(id="data-table-div", children=table_content(app.OptionQuotes[symbols[0]])),
             ]),
             html.Div(id='metrics-div', style={'padding': '5px', 'fontsize:': '10px', 'font-family': 'monospace'}, ),
+            dcc.Loading(
+                html.Div([
+                    dbc.Col(dcc.Graph(id="strike-volume", config={"displayModeBar": False}), style= {'width': '49%', 'display': 'inline-block'}, class_name='card'),
+                    dbc.Col(dcc.Graph(id="strike-volume-right", config={"displayModeBar": False}), style= {'width': '49%', 'display': 'inline-block'}, className='card'),
+                ]),
+                type="cube"),
+
+            dcc.Loading([
+                html.Div(deg.ExtendableGraph(id="pc-summary-graph", config={"displayModeBar": False}), className="card"),
+            ], type = 'default'),
             html.Div(children=[
                     html.Div(children=[
                         html.Div(children="Symbol", className="menu-title"),
@@ -134,17 +144,11 @@ def dash_layout():
                 className="menu",
             ),
             html.Div(id='strikes-selector-div', className="card"),
-            dcc.Loading(
-                html.Div([
-                    dbc.Col(dcc.Graph(id="strike-volume", config={"displayModeBar": False}), style= {'width': '49%', 'display': 'inline-block'}, class_name='card'),
-                    dbc.Col(dcc.Graph(id="strike-volume-right", config={"displayModeBar": False}), style= {'width': '49%', 'display': 'inline-block'}, className='card'),
-                ]),
-                type="cube"),
-
-            dcc.Loading([
-                html.Div(deg.ExtendableGraph(id="pc-summary-graph", config={"displayModeBar": False}), className="card"),
-                dcc.Interval(id='pc-summary-interval', interval=interval*1000, disabled=intervalDisabled),
-            ], type = 'default'),
+            html.Div([
+                html.Button("Download Parquet", id="btn_parquet"),
+                dcc.Download(id="download-dataframe-parquet"),
+            ]),
+            dcc.Interval(id='pc-summary-interval', interval=interval*1000, disabled=intervalDisabled),
             dcc.Store(id="pc-summary-store", data=None, modified_timestamp=0),
             html.Div(id="notify-container"),
             # html.Div(deg.ExtendableGraph(id="pc-volume-graph", config={"displayModeBar": False}, className="card")),
@@ -377,6 +381,18 @@ def func(symbol, strikes, xaxis, yaxis, intervalDisabled):
     return notification, intervalDisabled, state, fig_summary
 
 @app.callback(
+    Output("download-dataframe-parquet", "data"),
+    Input("btn_parquet", "n_clicks"),
+    Input("symbol", "value"),
+    prevent_initial_call=True,
+)
+def func(n_clicks, symbol):
+    oq = app.OptionQuotes[symbol]
+    #df = app.OptionQuotes[symbol].reload()
+    return dcc.send_file(oq.filename)
+    return dcc.send_data_frame(df.to_csv, f"{symbol}.csv.gz") #, sheet_name="0DTE")
+
+@app.callback(
     Output("strike-volume", "figure"),
     Output("strike-volume-right", "figure"),
     Input('pc-summary-interval','n_intervals'), 
@@ -468,10 +484,6 @@ def func(n, symbol):
 
     return fig, fig2
 
-def minmax(s):
-    min, max = s.min(), s.max()
-
-    return [min, max]
 
 if __name__ == '__main__':
     app.run_server(debug=True, host='0.0.0.0')
