@@ -42,7 +42,8 @@ class OptionQuotes:
         else:
             self.filename = f'data/{symbol}.2023-05-04.parquet'
         self.last_mtime = 0
-        self.reload(force=True)
+        self.data = None
+        # self.reload(force=True)
         pass
 
     def pivot(self):
@@ -83,14 +84,14 @@ class OptionQuotes:
 
         s = df['mark'].diff()
         s[df.symbol != df.symbol.shift(1)] = np.nan
-        df['mark_diff'] = s.round(2)
-        df['netVolume'] = np.sign(df['mark_diff']) * df['volume']
+        df['markDiff'] = s.round(2)
+        df['volumeUpDown'] = np.sign(df['markDiff']) * df['volume']
+        #df['volumeUpDownCum'] = df.groupby('symbol').apply(lambda x: x['volumeUpDown'].cumsum()).values
 
         df['underlyingPrice'] = df.underlyingPrice.round(0)
         df['distance'] = (df['strikePrice'] - df['underlyingPrice']).apply(lambda x: round(x / 10) * 10)
-        df['markVol'] = round(df.mark * df.volume,0)
-
-        df['gexVol'] = (df.mark * df.volume * df.gamma).round(0)
+        #df['markVol'] = round(df.mark * df.volume,0)
+        #df['gexVol'] = (df.mark * df.volume * df.gamma).round(0)
 
         # df['sma5'] = df.mark.rolling(5).mean().round(2)
         # df['sma10'] = df.mark.rolling(10).mean().round(2)
@@ -102,12 +103,10 @@ class OptionQuotes:
         df = self.filter_rth(df)
 
         df.fillna(0, inplace=True)
-        drops = ['tradeTimeInLong', 'quoteTimeInLong', 'netChange', 'gamma', 'rho', 'last',
+        drops = ['tradeTimeInLong', 'quoteTimeInLong', 'netChange', 'rho', 'vega', 'last',
             'bid', 'ask', 'highPrice', 'lowPrice', 'openPrice', 'closePrice', 'expirationDate', 'lastTradingDay', 'multiplier',
             'timeValue', 'theoreticalOptionValue', 'theoreticalVolatility', 'percentChange', 'markChange', 'markPercentChange', 'intrinsicValue',
         ]
-        #for col in drops: df.pop(col)
-        #df.pop([x for x in drops if x in df.columns])
         df.drop([x for x in drops if x in df.columns], inplace=True, axis=1)
 
         #strike_bins = pd.IntervalIndex.from_breaks(df.strikePrice.unique())
@@ -117,17 +116,9 @@ class OptionQuotes:
 
     def filter_rth(self, df=None):
         """filter the dataframe to remove rows before 9:30 today"""
-        # df.loc[df['datetime'].dt.time < pd.to_datetime('9:30 AM').time(), 'spread1'] = 0
-
         if df is None: df = self.data
         time = df.processDateTime.dt.time
         return df[(time >= pd.to_datetime('09:30:00').time()) & (time <= pd.to_datetime('16:00:00').time())]
-        #floor_dt = datetime.datetime(now_dt.year, now_dt.month, now_dt.day, 9, 30).astimezone(pytz.timezone('US/Eastern'))
-        #floor_dt64 = np.datetime64(floor_dt)
-        #ts = pd.Timestamp('today').floor('D') + datetime.timedelta(hours=9, minutes=30)
-        #floor = datetime.fromtimestamp(ts)
-        floor_dt = pytz.timezone("US/Eastern").localize(datetime.datetime.combine(datetime.datetime.now(), datetime.time(9, 30)))
-        return df[df.processDateTime >= floor_dt]
 
     def filter_low_volume(self, df, minVolume):
         """

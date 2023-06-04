@@ -6,7 +6,8 @@
 import warnings
 warnings.simplefilter(action='ignore', category=UserWarning)
 
-import plotly.express as px
+import glob
+import re
 from plotly.subplots import make_subplots
 import plotly.graph_objects as go
 import pandas as pd
@@ -19,10 +20,8 @@ from dash import Dash, html, dcc, Output, Input, State, dash_table, ctx
 import dash_mantine_components as dmc
 from dash_iconify import DashIconify
 import dash_bootstrap_components as dbc
-from utils import OptionQuotes
 import dash_extendable_graph as deg
-import glob
-import re
+from utils import OptionQuotes
 
 def seconds_to_monday():
     from datetime import datetime, timedelta, time
@@ -81,9 +80,9 @@ def dash_layout():
         files = get_files()
         for k, v in files.items():
             app.OptionQuotes[k] = OptionQuotes(symbol=k,filename=v)
-            app.OptionQuotes[k].data.file_label = k
         symbols += sorted(files.keys(), reverse=True)
         symbols = sorted(app.OptionQuotes.keys(), reverse=True)
+        app.OptionQuotes[symbols[0]].reload()
     except Exception as e:
         return html.Div([
             html.Hr(),
@@ -171,14 +170,37 @@ server = app.server
 app.title = 'SPX 0DTE Chain React Analytics Peaker'
 app.layout = dash_layout
 
+from flask import send_file, make_response
+@app.server.route('/data/raw/<symbol>')
+def serve_data_raw_file(symbol):
+    app.logger.info(f'serve_data_raw_file {symbol}')
+    oq = app.OptionQuotes[symbol]
+    response = make_response(send_file(oq.filename))
+    response.headers['Content-Disposition'] = f'attachment; filename=f"{symbol}.parquet"'
+    return response
+
+@app.server.route('/data/<symbol>')
+def serve_data_file(symbol):
+    import io
+    ts = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    app.logger.info(f'{ts} serve_data_file {symbol}.parquet')
+    oq = app.OptionQuotes[symbol]
+    df = oq.reload()
+    parquet_data = io.BytesIO()
+    df.to_parquet(parquet_data)
+    parquet_data.seek(0)
+    response = make_response(send_file(parquet_data, mimetype='application/octet-stream',
+                             as_attachment=True, download_name=f"{symbol}.parquet"))
+
+    return response
+
 @app.callback(
     Output("strikes-selector-div", "children"),
     Input('symbol', 'value'),
 )
 def update_strikesselector(symbol):
     """TODO suppress_callback_exceptions=True"""
-    #logger.info(f"enter {symbol}")
-    df = app.OptionQuotes[symbol].data
+    df = app.OptionQuotes[symbol].reload()
     df = df.loc[(df.totalVolume > 10)]
     min, max = df.strikePrice.min(), df.strikePrice.max()
     priceMin, priceMax = int(df.underlyingPrice.min()), int(df.underlyingPrice.max())
@@ -237,7 +259,7 @@ def func(n_intervals, symbol):
     n_intervals = int(dfx.index.max().timestamp())
 
     data = [ { 'x': dfx.index, 'y': dfx['net'].values }, { 'x': dfx.index, 'y': dfx['mean'].values, }, ]
-    #app.logger.info(f'pc-volume-graph >> n={n_intervals} max_dt={max_dt} data={data[-60:]}')       
+    #app.logger.info(f'pc-volume-graph >> n={n_intervals} max_dt={max_dt} data={data[-60:]}')
     return [n_intervals, fig, data]
 
 def table_content(oq):
@@ -260,7 +282,6 @@ def metric_content(symbol):
     ]
 
 def chart_pc_summary(df, strikes, yaxis, xaxis, title=None):
-    #xaxis = 'processDateTime'
     hovertemplate = '<br>'.join(['%{fullData.name}', xaxis + '=%{x}', yaxis +'=%{y}', 'mark=%{customdata}', '<extra></extra>' ])
     fig = make_subplots(specs=[[{"secondary_y": True}]])
 
@@ -292,8 +313,6 @@ def chart_pc_summary(df, strikes, yaxis, xaxis, title=None):
         fig.update_xaxes(tickformat="%H:%M")
     fig.update_layout(title_text=f'SPX Call/Put Pez Dispenser {title} {yaxis}', template='plotly_dark', height=600)
     state = { 'names': [row['name'] for row in fig["data"]],  'max_dt': df.processDateTime.max(), 'strikes': strikes, 'yaxis': yaxis, 'xaxis': xaxis }
-    #app.logger.info(f'chart_pc_summary returns state={state}')
-    #app.logger.info(f'chart_pc_summary returns x={x}')
     return state, fig
 
 
@@ -301,8 +320,8 @@ def chart_pc_summary(df, strikes, yaxis, xaxis, title=None):
     Output("pc-summary-store", "data", allow_duplicate=True),
     Output("pc-summary-graph", "extendData"),
     Output("data-table-div", "children"),
-    Output("metrics-div", "children"), 
-    Input('pc-summary-interval','n_intervals'), 
+    Output("metrics-div", "children"),
+    Input('pc-summary-interval','n_intervals'),
     State("pc-summary-store", "data"),
     prevent_initial_call=True
 )
@@ -383,19 +402,19 @@ def func(symbol, strikes, xaxis, yaxis, intervalDisabled):
 @app.callback(
     Output("download-dataframe-parquet", "data"),
     Input("btn_parquet", "n_clicks"),
-    Input("symbol", "value"),
+    State("symbol", "value"),
     prevent_initial_call=True,
 )
 def func(n_clicks, symbol):
+    """ dcc.send_data_frame(df.to_parquet, f"symbol.parquet") """
     oq = app.OptionQuotes[symbol]
     #df = app.OptionQuotes[symbol].reload()
     return dcc.send_file(oq.filename)
-    return dcc.send_data_frame(df.to_csv, f"{symbol}.csv.gz") #, sheet_name="0DTE")
 
 @app.callback(
     Output("strike-volume", "figure"),
     Output("strike-volume-right", "figure"),
-    Input('pc-summary-interval','n_intervals'), 
+    Input('pc-summary-interval','n_intervals'),
     Input("symbol", "value"),
 )
 def func(n, symbol):
@@ -404,6 +423,8 @@ def func(n, symbol):
 
     df['sma5'] = df.volume.rolling(5).mean().round(2)
     df['sma15'] = df.volume.rolling(15).mean().round(2)
+    df['vwap5'] = df.groupby('symbol').apply(calculate_vwap, window=5).values
+    df['vwap15'] = df.groupby('symbol').apply(calculate_vwap, window=15).values
 
     max_dt = pd.to_datetime('2023-05-31 11:30:00-04:00')
     max_dt = df.processDateTime.max()
@@ -446,11 +467,11 @@ def func(n, symbol):
     fig2.add_vline(x=0, line_color='yellow')
     fig2.add_hline(y=underlyingPrice, line_color='crimson', line_dash='dot', annotation_text=f'SPX {int(underlyingPrice)}')
 
-    m0 = (df.volume > df.sma5) & (df.sma5 > df.sma15) & (df.volume > 0)
-    m1 = (df.volume < df.sma5) & (df.sma5 < df.sma15) & (df.volume < 0)
+    m0 = (df.volume > df.sma5) & (df.sma5 > df.sma15) & (df.volume > 0) & (df.mark > 0.25)
+    m1 = (df.volume < df.sma5) & (df.sma5 < df.sma15) & (df.volume < 0) & (df.mark > 0.25)
     dfx = df.loc[(m0) | (m1)]
     for index, row in dfx.iterrows():
-        action = 'Buy' if row.mark_diff > 0 else 'Sell'
+        action = 'Buy' if row.markDiff > 0 else 'Sell'
         fig2.add_annotation(text=f"{action} {row.strikePrice:.0f}@{row.mark:.2f}", x=row.volume, y=row.strikePrice, arrowhead=1, showarrow=True)
 
     df_base_mask = (df_base.mark > 0.44) & (df_base.sma5.abs() > 10)
@@ -484,7 +505,25 @@ def func(n, symbol):
 
     return fig, fig2
 
+def calculate_vwap(data, window=10):
+    rolling_pv = (data['volume'] * data.mark).rolling(window=window, min_periods=1).sum()
+    rolling_volume = data['volume'].rolling(window=window,min_periods=1).sum()
+    vwap = rolling_pv / rolling_volume
+    vwap.rename('vwap', inplace=True)
+    vwap[pd.isna(vwap)] = data.mark
+    return vwap
+
+# import logging
+# logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
+# class TimestampedHandler(logging.Handler):
+#     def emit(self, record):
+#         timestamp = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+#         record.msg = f"{timestamp} - {record.msg}"
+#         super().emit(record)
+
+# logging.getLogger().addHandler(TimestampedHandler())
 
 if __name__ == '__main__':
+    app.logger.info("Dash app starting")
     app.run_server(debug=True, host='0.0.0.0')
     print("Done")
