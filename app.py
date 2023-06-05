@@ -90,8 +90,8 @@ def dash_layout():
             html.Span(f'{e}', style={'padding': '5px', 'fontsize:': '10px'}),
         ])
 
-    xfields = [ 'processDateTime', 'strikePrice']#, 'underlyingPrice', 'strikePrice']
-    yfields = [ 'volume', 'markVol', 'distance', 'totalVolume', 'netVolume', 'mark'] #, 'markVol', 'gexVol', 'mark', 'totalVolume', 'delta' ]
+    xfields = [ 'processDateTime', 'strikePrice', 'distance']#, 'underlyingPrice', 'strikePrice']
+    yfields = [ 'volume', 'totalVolume', 'gex', 'mark'] #, 'markVol', 'gexVol', 'mark', 'totalVolume', 'delta' ]
     intervalDisabled = True # is_market_closed()
     interval = 60
 
@@ -104,15 +104,9 @@ def dash_layout():
                 html.Div(id="data-table-div", children=table_content(app.OptionQuotes[symbols[0]])),
             ]),
             html.Div(id='metrics-div', style={'padding': '5px', 'fontsize:': '10px', 'font-family': 'monospace'}, ),
-            dcc.Loading(
-                html.Div([
-                    dbc.Col(dcc.Graph(id="strike-volume", config={"displayModeBar": False}), style= {'width': '49%', 'display': 'inline-block'}, class_name='card'),
-                    dbc.Col(dcc.Graph(id="strike-volume-right", config={"displayModeBar": False}), style= {'width': '49%', 'display': 'inline-block'}, className='card'),
-                ]),
-                type="cube"),
-
+            dcc.Loading( html.Div(id='strike-volume-div'),  type="cube"),
             dcc.Loading([
-                html.Div(deg.ExtendableGraph(id="pc-summary-graph", config={"displayModeBar": False}), className="card"),
+                html.Div(deg.ExtendableGraph(id="pc-summary-graph", config={"displayModeBar": False}), className="card", id='row2-div'),
             ], type = 'default'),
             html.Div(children=[
                     html.Div(children=[
@@ -170,7 +164,7 @@ server = app.server
 app.title = 'SPX 0DTE Chain React Analytics Peaker'
 app.layout = dash_layout
 
-from flask import send_file, make_response
+from flask import send_file, make_response, request
 @app.server.route('/data/raw/<symbol>')
 def serve_data_raw_file(symbol):
     app.logger.info(f'serve_data_raw_file {symbol}')
@@ -182,16 +176,16 @@ def serve_data_raw_file(symbol):
 @app.server.route('/data/<symbol>')
 def serve_data_file(symbol):
     import io
+    from utils import EasternDT
+    max_dt = EasternDT.u2e(request.args.get('u'))    
     ts = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-    app.logger.info(f'{ts} serve_data_file {symbol}.parquet')
+    app.logger.info(f'{ts} serve_data_file << symbol={symbol}.parquet max_dt={max_dt}')
     oq = app.OptionQuotes[symbol]
     df = oq.reload()
     parquet_data = io.BytesIO()
-    df.to_parquet(parquet_data)
+    df[(df.processDateTime > max_dt)].to_parquet(parquet_data)
     parquet_data.seek(0)
-    response = make_response(send_file(parquet_data, mimetype='application/octet-stream',
-                             as_attachment=True, download_name=f"{symbol}.parquet"))
-
+    response = make_response(send_file(parquet_data, mimetype='application/octet-stream', as_attachment=True, download_name=f"{symbol}.parquet"))
     return response
 
 @app.callback(
@@ -222,45 +216,45 @@ def update_strikesselector(symbol):
                 tooltip={"placement": "bottom", "always_visible": True}, id='strikes-rangeslider')
     ]
 
-@app.callback([
-        Output('pc-volume-interval', 'n_intervals'),
-        Output('pc-volume-graph', 'figure'),
-        Output('pc-volume-graph', 'extendData')],
-        Input('pc-volume-interval', 'n_intervals'),
-        Input("symbol", "value")
-)
-def func(n_intervals, symbol):
-    # ids = ctx.triggered_prop_ids
-    # app.logger.info(f'pc-volume-graph << n={n_intervals} symbol={symbol} ids={ids}')
-    # now_dt = datetime.datetime.now(pytz.timezone('US/Eastern'))
-    if n_intervals is None or 'symbol.value' in ctx.triggered_prop_ids:
-        n_intervals = 0
-        fig = go.Figure(layout={'title':f'Cummulative Put/Call Volume {symbol}', 'template': 'plotly_dark', 'height':400},
-            data=[go.Bar(name='Net', marker_color='lightslategray',x=[], y=[]), go.Scatter(name='SMA10', line_color="lightsalmon",x=[],y=[])])
-    else:
-        fig = dash.no_update
+# @app.callback([
+#         Output('pc-volume-interval', 'n_intervals'),
+#         Output('pc-volume-graph', 'figure'),
+#         Output('pc-volume-graph', 'extendData')],
+#         Input('pc-volume-interval', 'n_intervals'),
+#         Input("symbol", "value")
+# )
+# def func(n_intervals, symbol):
+#     # ids = ctx.triggered_prop_ids
+#     # app.logger.info(f'pc-volume-graph << n={n_intervals} symbol={symbol} ids={ids}')
+#     # now_dt = datetime.datetime.now(pytz.timezone('US/Eastern'))
+#     if n_intervals is None or 'symbol.value' in ctx.triggered_prop_ids:
+#         n_intervals = 0
+#         fig = go.Figure(layout={'title':f'Cummulative Put/Call Volume {symbol}', 'template': 'plotly_dark', 'height':400},
+#             data=[go.Bar(name='Net', marker_color='lightslategray',x=[], y=[]), go.Scatter(name='SMA10', line_color="lightsalmon",x=[],y=[])])
+#     else:
+#         fig = dash.no_update
 
-    yaxis = 'totalVolume'
-    df = app.OptionQuotes[symbol].reload()
+#     yaxis = 'totalVolume'
+#     df = app.OptionQuotes[symbol].reload()
 
-    s = df.groupby(['putCall', 'processDateTime'])[yaxis].sum()
-    dfx = pd.DataFrame()
-    dfx['puts'] = s.loc[('PUT', slice(None))]
-    dfx['calls'] = s.loc[('CALL', slice(None))]
-    dfx['net'] = dfx.calls - dfx.puts
-    dfx['mean'] = dfx.net.rolling(10).mean()
+#     s = df.groupby(['putCall', 'processDateTime'])[yaxis].sum()
+#     dfx = pd.DataFrame()
+#     dfx['puts'] = s.loc[('PUT', slice(None))]
+#     dfx['calls'] = s.loc[('CALL', slice(None))]
+#     dfx['net'] = dfx.calls - dfx.puts
+#     dfx['mean'] = dfx.net.rolling(10).mean()
 
-    max_dt = datetime.datetime.utcfromtimestamp(n_intervals)
-    max_dt = max_dt.replace(tzinfo=pytz.utc).astimezone(pytz.timezone('US/Eastern'))
+#     max_dt = datetime.datetime.utcfromtimestamp(n_intervals)
+#     max_dt = max_dt.replace(tzinfo=pytz.utc).astimezone(pytz.timezone('US/Eastern'))
 
-    dfx = dfx[(dfx.index > max_dt)]
-    if dfx.empty:
-        return [n_intervals-1, fig, None]
-    n_intervals = int(dfx.index.max().timestamp())
+#     dfx = dfx[(dfx.index > max_dt)]
+#     if dfx.empty:
+#         return [n_intervals-1, fig, None]
+#     n_intervals = int(dfx.index.max().timestamp())
 
-    data = [ { 'x': dfx.index, 'y': dfx['net'].values }, { 'x': dfx.index, 'y': dfx['mean'].values, }, ]
-    #app.logger.info(f'pc-volume-graph >> n={n_intervals} max_dt={max_dt} data={data[-60:]}')
-    return [n_intervals, fig, data]
+#     data = [ { 'x': dfx.index, 'y': dfx['net'].values }, { 'x': dfx.index, 'y': dfx['mean'].values, }, ]
+#     #app.logger.info(f'pc-volume-graph >> n={n_intervals} max_dt={max_dt} data={data[-60:]}')
+#     return [n_intervals, fig, data]
 
 def table_content(oq):
     now = oq.data.processDateTime.max()
@@ -289,6 +283,9 @@ def chart_pc_summary(df, strikes, yaxis, xaxis, title=None):
     data = data.sort_values(['symbol', 'processDateTime'])
     symbols = data.symbol.sort_values().unique()
 
+    mode = 'lines' if xaxis == 'processDateTime' and yaxis == 'gex' else 'markers'
+    stackgroup =  'all' if xaxis == 'processDateTime' and yaxis == 'gex' else None
+
     for s in symbols:
         sign = 1 if data[(data.symbol == s)].iloc[0].putCall == 'CALL' else -1
         if xaxis == 'processDateTime':
@@ -298,15 +295,12 @@ def chart_pc_summary(df, strikes, yaxis, xaxis, title=None):
         y=data[(data.symbol == s)][yaxis]
         y = y * sign
         cd=data[(data.symbol == s)].mark
-        fig.add_trace(go.Scattergl(x=x, y=y, customdata=cd, name=s, text=s, mode='markers', hovertemplate=hovertemplate), secondary_y=False,)
+        fig.add_trace(go.Scatter(x=x, y=y, customdata=cd, name=s, text=s, mode=mode, stackgroup=stackgroup, hovertemplate=hovertemplate), secondary_y=False,)
 
     if xaxis == 'processDateTime':
-        fig.add_trace(
-            go.Scattergl(x=data[(data.symbol == symbols[0])][xaxis].dt.tz_localize(tz=None), y=data[(data.symbol == symbols[0])]['underlyingPrice'].values,
-                    name="underlyingPrice",
-                    marker_color='white'),
-            secondary_y=True,
-        )
+        fig.add_trace(go.Scattergl(x=data[(data.symbol == symbols[0])][xaxis].dt.tz_localize(tz=None), y=data[(data.symbol == symbols[0])]['underlyingPrice'].values, name="underlyingPrice", marker_color='white'),
+            secondary_y=True)
+
     fig['layout']['yaxis2']['showgrid'] = False
     fig.update_yaxes(title_text="<b>underlyingPrice</b>", secondary_y=True)
     if xaxis == 'processDateTime':
@@ -400,20 +394,19 @@ def func(symbol, strikes, xaxis, yaxis, intervalDisabled):
     return notification, intervalDisabled, state, fig_summary
 
 @app.callback(
-    Output("download-dataframe-parquet", "data"),
-    Input("btn_parquet", "n_clicks"),
-    State("symbol", "value"),
-    prevent_initial_call=True,
-)
+    Output("download-dataframe-parquet", "data"), Input("btn_parquet", "n_clicks"),State("symbol", "value"), prevent_initial_call=True,)
 def func(n_clicks, symbol):
-    """ dcc.send_data_frame(df.to_parquet, f"symbol.parquet") """
     oq = app.OptionQuotes[symbol]
-    #df = app.OptionQuotes[symbol].reload()
     return dcc.send_file(oq.filename)
 
 @app.callback(
-    Output("strike-volume", "figure"),
-    Output("strike-volume-right", "figure"),
+    Output("download-dataframe-csv", "data"), Input("btn_parquet", "n_clicks"), State("symbol", "value"), prevent_initial_call=True,)
+def func(n_clicks, symbol):
+    oq = app.OptionQuotes[symbol]
+    return dcc.send_data_frame(oq.reload().to_csv, f'{oq.filename}.csv')
+
+@app.callback(
+    Output("strike-volume-div", "children"),
     Input('pc-summary-interval','n_intervals'),
     Input("symbol", "value"),
 )
@@ -503,7 +496,11 @@ def func(n, symbol):
     fig2 = go.Figure(dict2)
     # app.logger.info(f'Made fig {datetime.datetime.now()}')
 
-    return fig, fig2
+    content = [
+        dbc.Col(dcc.Graph(id="strike-volume-left", config={"displayModeBar": False}, figure=fig), style= {'width': '49%', 'display': 'inline-block'}, class_name='card'),
+        dbc.Col(dcc.Graph(id="strike-volume-right", config={"displayModeBar": False}, figure=fig2), style= {'width': '49%', 'display': 'inline-block'}, className='card'),
+    ]
+    return content
 
 def calculate_vwap(data, window=10):
     rolling_pv = (data['volume'] * data.mark).rolling(window=window, min_periods=1).sum()

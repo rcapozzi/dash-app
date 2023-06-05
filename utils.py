@@ -86,12 +86,12 @@ class OptionQuotes:
         s[df.symbol != df.symbol.shift(1)] = np.nan
         df['markDiff'] = s.round(2)
         df['volumeUpDown'] = np.sign(df['markDiff']) * df['volume']
-        #df['volumeUpDownCum'] = df.groupby('symbol').apply(lambda x: x['volumeUpDown'].cumsum()).values
+        df['volumeUpDownCum'] = df.groupby('symbol').apply(lambda x: x['volumeUpDown'].cumsum()).values
+        df['openInterestNet'] = df.openInterest + df['volumeUpDownCum']
+        df['gex'] = df['openInterestNet'] * df.gamma
 
         df['underlyingPrice'] = df.underlyingPrice.round(0)
         df['distance'] = (df['strikePrice'] - df['underlyingPrice']).apply(lambda x: round(x / 10) * 10)
-        #df['markVol'] = round(df.mark * df.volume,0)
-        #df['gexVol'] = (df.mark * df.volume * df.gamma).round(0)
 
         # df['sma5'] = df.mark.rolling(5).mean().round(2)
         # df['sma10'] = df.mark.rolling(10).mean().round(2)
@@ -106,6 +106,7 @@ class OptionQuotes:
         drops = ['tradeTimeInLong', 'quoteTimeInLong', 'netChange', 'rho', 'vega', 'last',
             'bid', 'ask', 'highPrice', 'lowPrice', 'openPrice', 'closePrice', 'expirationDate', 'lastTradingDay', 'multiplier',
             'timeValue', 'theoreticalOptionValue', 'theoreticalVolatility', 'percentChange', 'markChange', 'markPercentChange', 'intrinsicValue',
+            'volumeUpDown', 'volumeUpDownCum', 'openInterestNet',
         ]
         df.drop([x for x in drops if x in df.columns], inplace=True, axis=1)
 
@@ -166,3 +167,20 @@ class OptionQuotes:
         resp = opts | spread.to_dict()
         resp['open_dt'] = now
         return resp
+
+class EasternDT:
+    utc_timezone = pytz.timezone('UTC')
+    eastern_timezone = pytz.timezone('US/Eastern')
+
+    @classmethod
+    def u2e(cls, unix_timestamp=0):
+        if unix_timestamp is None: unix_timestamp = 0
+        utc_datetime = datetime.datetime.utcfromtimestamp(int(unix_timestamp))
+        return cls.utc_timezone.localize(utc_datetime).astimezone(cls.eastern_timezone)
+
+    @classmethod
+    def e2u(cls, eastern_datetime):
+        if eastern_datetime.tzinfo is None:
+            eastern_datetime = cls.eastern_timezone.localize(eastern_datetime)
+        utc_datetime = eastern_datetime.astimezone(cls.utc_timezone)
+        return int(utc_datetime.timestamp())
