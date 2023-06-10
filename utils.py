@@ -75,18 +75,27 @@ class OptionQuotes:
 
     def post_load_data(self):
         df = self.data
+        for field in ['volatility', 'delta', 'gamma', 'theta']:
+            df.loc[(df[field] < 0), field] = df.iloc[1][field]
+
         df.sort_values(['symbol', 'processDateTime'], inplace=True)
 
-        vol = df['totalVolume'].diff()
-        vol[df.symbol != df.symbol.shift(1)] = np.nan
-        vol[vol < 5] = 0
-        df['volume'] = vol
+        gb = df.groupby('symbol')
+        df['volume'] = gb['totalVolume'].diff().fillna(0)
+        df['markDiff'] = gb['mark'].diff().fillna(0).round(4)
+        df['markPctChange'] = gb['mark'].pct_change().fillna(0)
+        df['underlyingPriceDiff'] = gb['underlyingPrice'].diff().fillna(2)
 
-        s = df['mark'].diff()
-        s[df.symbol != df.symbol.shift(1)] = np.nan
-        df['markDiff'] = s.round(2)
-        df['volumeUpDown'] = np.sign(df['markDiff']) * df['volume']
-        df['volumeUpDownCum'] = df.groupby('symbol').apply(lambda x: x['volumeUpDown'].cumsum()).values
+
+        df['upDown'] = np.sign(  gb['mark'].diff() )
+        for i in range(2,10):
+            df.loc[(df.upDown == 0) & (df.mark > 0.19), 'upDown' ] = np.sign(  gb['mark'].diff(i) )
+        df['volumeUpDown'] = df['upDown'] * df['volume']
+
+        df.loc[(df.markDiff == 0), 'volumeUpDown'] = np.sign(df['underlyingPriceDiff']) * df['volume']
+
+        # df['volumeUpDownCum'] = df.groupby('symbol').apply(lambda x: x['volumeUpDown'].cumsum()).values
+        df['volumeUpDownCum'] = df.groupby('symbol').volumeUpDown.cumsum()
         df['openInterestNet'] = df.openInterest + df['volumeUpDownCum']
         df['gex'] = df['openInterestNet'] * df.gamma
 
@@ -103,10 +112,10 @@ class OptionQuotes:
         df = self.filter_rth(df)
 
         df.fillna(0, inplace=True)
-        drops = ['tradeTimeInLong', 'quoteTimeInLong', 'netChange', 'rho', 'vega', 'last',
+        drops = ['tradeTimeInLong', 'quoteTimeInLong', 'netChange', 'rho', 'vega',
             'bid', 'ask', 'highPrice', 'lowPrice', 'openPrice', 'closePrice', 'expirationDate', 'lastTradingDay', 'multiplier',
             'timeValue', 'theoreticalOptionValue', 'theoreticalVolatility', 'percentChange', 'markChange', 'markPercentChange', 'intrinsicValue',
-            'volumeUpDown', 'volumeUpDownCum', 'openInterestNet',
+            'upDown', 'volumeUpDown', 'volumeUpDownCum', 'openInterestNet',
         ]
         df.drop([x for x in drops if x in df.columns], inplace=True, axis=1)
 
@@ -174,6 +183,8 @@ class EasternDT:
 
     @classmethod
     def u2e(cls, unix_timestamp=0):
+        if unix_timestamp > 2**32:
+            unix_timestamp = unix_timestamp/1000
         if unix_timestamp is None: unix_timestamp = 0
         utc_datetime = datetime.datetime.utcfromtimestamp(int(unix_timestamp))
         return cls.utc_timezone.localize(utc_datetime).astimezone(cls.eastern_timezone)
