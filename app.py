@@ -2,10 +2,11 @@
 # gunicorn app:server -b :8050 --access-logfile access.log -D --reload
 # visit http://127.0.0.1:8050/ in your web browser.
 # https://realpython.com/python-dash/
-# https://www.pythonanywhere.com/user/rcapozzi/
+
 import warnings
 warnings.simplefilter(action='ignore', category=UserWarning)
 
+import os
 import glob
 import re
 from plotly.subplots import make_subplots
@@ -23,41 +24,18 @@ import dash_bootstrap_components as dbc
 import dash_extendable_graph as deg
 from utils import OptionQuotes
 
-def seconds_to_monday():
-    from datetime import datetime, timedelta, time
-    eastern_tz = pytz.timezone('US/Eastern')
-    try:
-        current_time = datetime.now().astimezone(pytz.timezone('US/Eastern'))
-        current_day = current_time.weekday()
-        days_ahead = (0 - current_day + 7) % 7  # Number of days until next Monday
-        next_monday = current_time + timedelta(days=days_ahead)
-        target_time = datetime.combine(next_monday.date(), time(9, 30))
-        target_time = eastern_tz.localize(target_time)
-        time_difference = (target_time - current_time).total_seconds()
-    except Exception as e:
-        app.logger.info(f'seconds_to_monday ! {e}')
-    return int(time_difference)
-
 def is_market_open():
         from datetime import datetime, time
         current_time = datetime.now().astimezone(pytz.timezone('US/Eastern'))
         current_day = current_time.weekday()
         if (
             current_day >= 0 and current_day <= 4   # Monday to Friday
-            and current_time.time() >= time(9, 30)         # After 9:30 am
-            and current_time.time() <= time(16)            # Before or at 4 pm
+            and current_time.time() >= time(9, 30)  # After 9:30 am
+            and current_time.time() <= time(16)     # Before or at 4 pm
         ):
             return True
         else:
             return False
-def is_market_closed():
-    return not is_market_open()
-
-def calc_interval():
-    if is_market_closed():
-        return seconds_to_monday()
-    return 60
-
 
 def get_files():
     file_dict = {}
@@ -92,7 +70,6 @@ def dash_layout():
 
     xfields = [ 'processDateTime', 'strikePrice', 'distance']#, 'underlyingPrice', 'strikePrice']
     yfields = [ 'volume', 'totalVolume', 'gex', 'mark'] #, 'markVol', 'gexVol', 'mark', 'totalVolume', 'delta' ]
-    intervalDisabled = True # is_market_closed()
     interval = 60
 
     content = html.Div([
@@ -103,11 +80,10 @@ def dash_layout():
                 html.Summary('Secret Section', style={'color': 'red', 'background': 'black'}),
                 html.Div(id="data-table-div", children=table_content(app.OptionQuotes[symbols[0]])),
             ]),
+            # html.Div(id='gauges-div', children=[dcc.Graph(id='gauges-graph')]),
             html.Div(id='metrics-div', style={'padding': '5px', 'fontsize:': '10px', 'font-family': 'monospace'}, ),
-            dcc.Loading( html.Div(id='strike-volume-div'),  type="cube"),
-            dcc.Loading([
-                html.Div(deg.ExtendableGraph(id="pc-summary-graph", config={"displayModeBar": False}), className="card", id='row2-div'),
-            ], type = 'default'),
+            html.Div(id='strike-volume-div'),
+            html.Div(deg.ExtendableGraph(id="pc-summary-graph", config={"displayModeBar": False}), className="card", id='row2-div'),
             html.Div(children=[
                     html.Div(children=[
                         html.Div(children="Symbol", className="menu-title"),
@@ -138,19 +114,16 @@ def dash_layout():
             ),
             html.Div(id='strikes-selector-div', className="card"),
             html.Div([
-                html.Button("Download Parquet", id="btn_parquet"),
-                dcc.Download(id="download-dataframe-parquet"),
+                html.Button("Download Parquet", id="btn_parquet"), dcc.Download(id="download-dataframe-parquet"),
+                html.Button("CSV", id="btn_csv"), dcc.Download(id="download-dataframe-csv"),
             ]),
-            dcc.Interval(id='pc-summary-interval', interval=interval*1000, disabled=intervalDisabled),
+            dcc.Interval(id='pc-summary-interval', interval=interval*1000, disabled=True),
             dcc.Store(id="pc-summary-store", data=None, modified_timestamp=0),
             html.Div(id="notify-container"),
             # html.Div(deg.ExtendableGraph(id="pc-volume-graph", config={"displayModeBar": False}, className="card")),
             # dcc.Interval(id='pc-volume-interval', interval=interval*1000, disabled=intervalDisabled),
         ])
     return dmc.MantineProvider(dmc.NotificationsProvider([content]))
-
-
-# ====================================================================
 
 
 external_stylesheets = [{
@@ -177,7 +150,7 @@ def serve_data_raw_file(symbol):
 def serve_data_file(symbol):
     import io
     from utils import EasternDT
-    max_dt = EasternDT.u2e(request.args.get('u'))    
+    max_dt = EasternDT.u2e(request.args.get('u'))
     ts = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     app.logger.info(f'{ts} serve_data_file << symbol={symbol}.parquet max_dt={max_dt}')
     oq = app.OptionQuotes[symbol]
@@ -187,6 +160,24 @@ def serve_data_file(symbol):
     parquet_data.seek(0)
     response = make_response(send_file(parquet_data, mimetype='application/octet-stream', as_attachment=True, download_name=f"{symbol}.parquet"))
     return response
+
+@app.callback(
+    Output("download-dataframe-parquet", "data"), Input("btn_parquet", "n_clicks"),State("symbol", "value"), prevent_initial_call=True,)
+def func(n_clicks, symbol):
+    app.logger.info(f'download parquet {symbol}')
+    oq = app.OptionQuotes[symbol]
+    return dcc.send_file(oq.filename)
+
+@app.callback(
+    Output("download-dataframe-csv", "data"), Input("btn_csv", "n_clicks"), State("symbol", "value"), prevent_initial_call=True,)
+def func(n_clicks, symbol):
+    app.logger.info(f'download csv {symbol}')
+    oq = app.OptionQuotes[symbol]
+    csv_filename = oq.filename.replace(".parquet", ".csv.gz")
+    if os.path.exists(csv_filename):
+        return dcc.send_file(csv_filename)
+    else:
+        return dcc.send_data_frame(oq.reload().to_csv, f'{symbol}.csv', index=False)
 
 @app.callback(
     Output("strikes-selector-div", "children"),
@@ -285,24 +276,42 @@ def chart_pc_summary(df, strikes, yaxis, xaxis, title=None):
 
     mode = 'lines' if xaxis == 'processDateTime' and yaxis == 'gex' else 'markers'
     stackgroup =  'all' if xaxis == 'processDateTime' and yaxis == 'gex' else None
+    if xaxis == 'strikePrice':
+        max_dt = data.processDateTime.max()
+        data = data[(df.processDateTime == max_dt)]
+        data['color'] = 'rgb(26, 118, 255)'
 
-    for s in symbols:
-        sign = 1 if data[(data.symbol == s)].iloc[0].putCall == 'CALL' else -1
-        if xaxis == 'processDateTime':
-            x=data[(data.symbol == s)][xaxis].dt.tz_localize(tz=None)
-        else:
-            x=data[(data.symbol == s)][xaxis]
-        y=data[(data.symbol == s)][yaxis]
-        y = y * sign
-        cd=data[(data.symbol == s)].mark
-        fig.add_trace(go.Scatter(x=x, y=y, customdata=cd, name=s, text=s, mode=mode, stackgroup=stackgroup, hovertemplate=hovertemplate), secondary_y=False,)
+        puts = data['putCall'] == 'PUT'
+        data.loc[puts, 'totalVolume'] *= -1
+        data.loc[puts, 'volume'] *= -1
+        data.loc[puts, 'color'] = 'rgb(55, 83, 109)'
+        data['totalVolumeGamma'] = data.totalVolume * data.gamma
+
+        for callPut in ['CALL', 'PUT']:
+            df = data.loc[data['putCall'] == callPut ]
+            fig.add_trace(go.Bar(x=df[xaxis], y=df[yaxis], marker_color=df.color, name=callPut,
+                    customdata=df.mark, texttemplate="%{x}<br>%{customdata}", textposition="auto",
+            ))
+
+        fig.update_layout(barmode='relative')
+    else:
+        for s in symbols:
+            sign = 1 if data[(data.symbol == s)].iloc[0].putCall == 'CALL' else -1
+            if xaxis == 'processDateTime':
+                x=data[(data.symbol == s)][xaxis].dt.tz_localize(tz=None)
+            else:
+                x=data[(data.symbol == s)][xaxis]
+            y=data[(data.symbol == s)][yaxis]
+            y = y * sign
+            cd=data[(data.symbol == s)].mark
+            fig.add_trace(go.Scatter(x=x, y=y, customdata=cd, name=s, text=s, mode=mode, stackgroup=stackgroup, hovertemplate=hovertemplate), secondary_y=False,)
 
     if xaxis == 'processDateTime':
-        fig.add_trace(go.Scattergl(x=data[(data.symbol == symbols[0])][xaxis].dt.tz_localize(tz=None), y=data[(data.symbol == symbols[0])]['underlyingPrice'].values, name="underlyingPrice", marker_color='white'),
-            secondary_y=True)
+        ul = df.groupby('processDateTime').underlyingPrice.mean()
+        fig.add_trace(go.Scattergl(x=ul.index, y=ul, name="underlyingPrice", marker_color='white'), secondary_y=True)
 
-    fig['layout']['yaxis2']['showgrid'] = False
-    fig.update_yaxes(title_text="<b>underlyingPrice</b>", secondary_y=True)
+    fig['layout']['yaxis']['showgrid'] = False
+    fig.update_yaxes(title_text="<b>underlyingPrice</b>", secondary_y=True, showgrid=True)
     if xaxis == 'processDateTime':
         fig.update_xaxes(tickformat="%H:%M")
     fig.update_layout(title_text=f'SPX Call/Put Pez Dispenser {title} {yaxis}', template='plotly_dark', height=600)
@@ -334,7 +343,6 @@ def func(n_interval, cookie):
     symbol = cookie['symbol']
     oq = app.OptionQuotes[cookie['symbol']]
     df = oq.reload()
-    #df = df[(df.processDateTime > max_dt) & (df.processDateTime <= dt)]
     df = df[(df.processDateTime > max_dt)]
     if df.empty:
         # app.logger.info(f'{fmt} >> No new data')
@@ -342,7 +350,6 @@ def func(n_interval, cookie):
     state, fig = chart_pc_summary(df, cookie['strikes'], cookie['yaxis'], cookie['xaxis'], title='Nope')
 
     data = {item['name']: {'x': item['x'], 'y': item['y']} for item in fig['data']}
-    #app.logger.info(f'{fmt} >> data={data}')
 
     # 1. Every existing traces needs a row
     updates = []
@@ -376,7 +383,6 @@ def func(n_interval, cookie):
     prevent_initial_call=True
 )
 def func(symbol, strikes, xaxis, yaxis, intervalDisabled):
-    # notification = None
     # app.logger.info(f'pc_summary << symbol={symbol}')
     # if 'symbol.value' in ctx.triggered_prop_ids:
     date_string = symbol.split(".")[-1]
@@ -387,23 +393,9 @@ def func(symbol, strikes, xaxis, yaxis, intervalDisabled):
     icon="mdi:gun"
     notification = dmc.Notification(id="my-notification", message=f"Updates {s} for {symbol}", color="green", action="show", icon=DashIconify(icon=icon),autoClose=5_000)
     df = app.OptionQuotes[symbol].reload()
-    #dt = pytz.timezone("US/Eastern").localize(datetime.datetime(2023, 5, 19, 11, 0))
-    #dfx = df[(df.processDateTime < dt)]
-    state, fig_summary = chart_pc_summary(df, strikes, yaxis, xaxis, title=symbol)
+    state, fig = chart_pc_summary(df, strikes, yaxis, xaxis, title=symbol)
     state['symbol'] = symbol
-    return notification, intervalDisabled, state, fig_summary
-
-@app.callback(
-    Output("download-dataframe-parquet", "data"), Input("btn_parquet", "n_clicks"),State("symbol", "value"), prevent_initial_call=True,)
-def func(n_clicks, symbol):
-    oq = app.OptionQuotes[symbol]
-    return dcc.send_file(oq.filename)
-
-@app.callback(
-    Output("download-dataframe-csv", "data"), Input("btn_parquet", "n_clicks"), State("symbol", "value"), prevent_initial_call=True,)
-def func(n_clicks, symbol):
-    oq = app.OptionQuotes[symbol]
-    return dcc.send_data_frame(oq.reload().to_csv, f'{oq.filename}.csv')
+    return notification, intervalDisabled, state, fig
 
 @app.callback(
     Output("strike-volume-div", "children"),
@@ -422,10 +414,6 @@ def func(n, symbol):
     max_dt = pd.to_datetime('2023-05-31 11:30:00-04:00')
     max_dt = df.processDateTime.max()
     dt = max_dt.strftime('%Y-%m-%d %H:%M')
-
-    # dfg = df.groupby('symbol').agg({'netVolume':'sum'})
-    # dfg = dfg.rename(columns={'netVolume': 'cumNetVolume'})
-    # df = pd.merge(df, dfg, on='symbol')
 
     df.loc[df['putCall'] == 'CALL', 'totalVolume'] *= -1
     df.loc[df['putCall'] == 'CALL', 'volume'] *= -1
@@ -454,11 +442,11 @@ def func(n, symbol):
 
     # Figure 2
     fig2 = go.Figure(layout=go.Layout(title=go.layout.Title(text=f"Prior One Minute Volume (mark over 0.50 & sma5 vol > 10) {dt}"), barmode='overlay'))
-    fig2.update_layout(legend=dict(yanchor="bottom", y=1.05, xanchor="right", x=1, orientation="h",), template='plotly_dark')
+    fig2.update_layout(legend=dict(yanchor="bottom", y=1.05, xanchor="right", x=1, orientation="h",)) #, template='plotly_dark')
     fig2.update_yaxes(autorange="reversed")
 
-    fig2.add_vline(x=0, line_color='yellow')
-    fig2.add_hline(y=underlyingPrice, line_color='crimson', line_dash='dot', annotation_text=f'SPX {int(underlyingPrice)}')
+    fig2.add_vline(x=0, line_color='black', line_dash='dot')
+    fig2.add_hline(y=underlyingPrice, line_color='black', line_dash='dot', annotation_text=f'SPX {int(underlyingPrice)}')
 
     m0 = (df.volume > df.sma5) & (df.sma5 > df.sma15) & (df.volume > 0) & (df.mark > 0.25)
     m1 = (df.volume < df.sma5) & (df.sma5 < df.sma15) & (df.volume < 0) & (df.mark > 0.25)
@@ -477,8 +465,8 @@ def func(n, symbol):
         puts = df[(df.putCall == 'PUT')]
         calls = df[(df.putCall == 'CALL')]
         data.append(go.Bar(x=calls.volume, y=calls.strikePrice, name='calls', orientation='h', marker_color='rgb(26, 118, 255)', ))
-        data.append(go.Bar(x=puts.volume, y=puts.strikePrice, name='puts', orientation='h', marker_color='rgb(55, 83, 109)', ))
-        data.append(go.Bar(x=df.sma5, y=df.strikePrice, name='sma5', orientation='h', width=1, marker_color='indianred', showlegend=True,))
+        data.append(go.Bar(x=puts.volume, y=puts.strikePrice, name='puts', orientation='h', marker_color='black' )) #marker_color='rgb(55, 83, 109)', ))
+        data.append(go.Bar(x=df.sma5, y=df.strikePrice, name='sma5', orientation='h', width=1, marker_color='crimson', showlegend=True,))
         data.append(go.Scatter(x=df.sma15, y=df.strikePrice, name='sma15', mode='markers', orientation='h',
                 marker=dict(size=12, symbol="line-ns", line=dict(width=2, color="pink"))
             ))
@@ -494,7 +482,6 @@ def func(n, symbol):
     dict2['layout']['updatemenus'] = [dict(type="buttons", font={'color':'black'}, buttons=[dict(label="last5", method="animate", args=[None])])]
     dict2['frames'] = [ f for f in frames ]
     fig2 = go.Figure(dict2)
-    # app.logger.info(f'Made fig {datetime.datetime.now()}')
 
     content = [
         dbc.Col(dcc.Graph(id="strike-volume-left", config={"displayModeBar": False}, figure=fig), style= {'width': '49%', 'display': 'inline-block'}, class_name='card'),
@@ -510,15 +497,16 @@ def calculate_vwap(data, window=10):
     vwap[pd.isna(vwap)] = data.mark
     return vwap
 
+
 # import logging
-# logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
+# logging.basicConfig(level=logging.INFO, format="%(asctime)s %(message)s", datefmt='%Y-%m-%d %H:%M:%S')
 # class TimestampedHandler(logging.Handler):
 #     def emit(self, record):
 #         timestamp = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 #         record.msg = f"{timestamp} - {record.msg}"
 #         super().emit(record)
-
-# logging.getLogger().addHandler(TimestampedHandler())
+#logger = logging.getLogger(__name__)pytho
+#app.logger.addHandler(TimestampedHandler())
 
 if __name__ == '__main__':
     app.logger.info("Dash app starting")

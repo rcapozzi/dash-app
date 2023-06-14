@@ -195,3 +195,7 @@ class EasternDT:
             eastern_datetime = cls.eastern_timezone.localize(eastern_datetime)
         utc_datetime = eastern_datetime.astimezone(cls.utc_timezone)
         return int(utc_datetime.timestamp())
+
+    @classmethod
+    def now(cls):
+        return datetime.datetime.now(cls.eastern_timezone)
