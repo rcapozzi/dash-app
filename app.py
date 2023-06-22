@@ -267,10 +267,19 @@ def metric_content(symbol):
     ]
 
 def chart_pc_summary(df, strikes, yaxis, xaxis, title=None):
+    if df is None: return
     hovertemplate = '<br>'.join(['%{fullData.name}', xaxis + '=%{x}', yaxis +'=%{y}', 'mark=%{customdata}', '<extra></extra>' ])
     fig = make_subplots(specs=[[{"secondary_y": True}]])
 
-    data = df[(df.strikePrice >= strikes[0]) & (df.strikePrice <= strikes[1])]
+    data = df[(df.strikePrice >= strikes[0]) & (df.strikePrice <= strikes[1])].copy()
+    if xaxis == 'processDateTime':
+        data['x']=data[xaxis].dt.tz_localize(tz=None)
+    if yaxis == 'volume':
+        data['sign'] = np.where(data['volume'] < 50, np.nan, np.where(data['putCall'] == 'CALL', 1, -1))
+    else:
+        data['sign'] = np.where(data['putCall'] == 'CALL', 1, -1)
+    data['y'] = data[yaxis] * data['sign']
+
     data = data.sort_values(['symbol', 'processDateTime'])
     symbols = data.symbol.sort_values().unique()
 
@@ -296,15 +305,13 @@ def chart_pc_summary(df, strikes, yaxis, xaxis, title=None):
         fig.update_layout(barmode='relative')
     else:
         for s in symbols:
-            sign = 1 if data[(data.symbol == s)].iloc[0].putCall == 'CALL' else -1
-            if xaxis == 'processDateTime':
-                x=data[(data.symbol == s)][xaxis].dt.tz_localize(tz=None)
-            else:
-                x=data[(data.symbol == s)][xaxis]
-            y=data[(data.symbol == s)][yaxis]
-            y = y * sign
-            cd=data[(data.symbol == s)].mark
-            fig.add_trace(go.Scatter(x=x, y=y, customdata=cd, name=s, text=s, mode=mode, stackgroup=stackgroup, hovertemplate=hovertemplate), secondary_y=False,)
+            filter = data[(data.symbol == s)]
+            x = filter[xaxis]
+            y = filter['y']
+            cd= filter.mark
+            #ms= filter['mark'] * filter.volume.abs()/100
+            #fig.add_trace(go.Scattergl(x=x, y=y, customdata=cd, name=s, text=s, mode=mode, marker_size=ms, hovertemplate=hovertemplate), secondary_y=False)
+            fig.add_trace(go.Scattergl(x=x, y=y, customdata=cd, name=s, text=s, mode=mode, hovertemplate=hovertemplate), secondary_y=False)
 
     if xaxis == 'processDateTime':
         ul = df.groupby('processDateTime').underlyingPrice.mean()
@@ -408,20 +415,29 @@ def func(n, symbol):
 
     df['sma5'] = df.volume.rolling(5).mean().round(2)
     df['sma15'] = df.volume.rolling(15).mean().round(2)
-    df['vwap5'] = df.groupby('symbol').apply(calculate_vwap, window=5).values
-    df['vwap15'] = df.groupby('symbol').apply(calculate_vwap, window=15).values
+    #df['vwap5'] = df.groupby('symbol').apply(calculate_vwap, window=5).values
+    #df['vwap15'] = df.groupby('symbol').apply(calculate_vwap, window=15).values
 
     max_dt = pd.to_datetime('2023-05-31 11:30:00-04:00')
     max_dt = df.processDateTime.max()
     dt = max_dt.strftime('%Y-%m-%d %H:%M')
 
-    df.loc[df['putCall'] == 'CALL', 'totalVolume'] *= -1
-    df.loc[df['putCall'] == 'CALL', 'volume'] *= -1
-    df.loc[df['putCall'] == 'CALL', 'sma5'] *= -1
-    df.loc[df['putCall'] == 'CALL', 'sma15'] *= -1
+    mask = df['putCall'] == 'CALL'
+    df.loc[mask, 'totalVolume'] *= -1
+    df.loc[mask, 'volume'] *= -1
+    df.loc[mask, 'sma5'] *= -1
+    df.loc[mask, 'sma15'] *= -1
     df_base = df.copy()
     df = df[(df.processDateTime == max_dt)]
     underlyingPrice = df.underlyingPrice.abs().max()
+
+    dfx = df.loc[(df.putCall == 'PUT')]
+    putGexPrice = (dfx.gex * dfx.strikePrice).sum() / dfx.gex.sum()
+    putGexWeight = (dfx.gex * dfx.strikePrice).sum() / dfx.strikePrice.sum()
+    dfx = df.loc[(df.putCall == 'CALL')]
+    callGexPrice = (dfx.gex * dfx.strikePrice).sum() / dfx.gex.sum()
+    callGexWeight = (dfx.gex * dfx.strikePrice).sum() / dfx.strikePrice.sum()
+    netGexPrice = ((callGexPrice * callGexWeight) + (putGexPrice * putGexWeight)) / (callGexWeight + putGexWeight)
 
     fig = go.Figure(layout=go.Layout(title=go.layout.Title(text=f"Total Volume for Twoday {dt}"), barmode='overlay'))
     fig.update_layout(barmode='overlay', yaxis_title='Strike Price', )
@@ -429,7 +445,11 @@ def func(n, symbol):
     fig.update_yaxes(autorange="reversed")
 
     fig.add_vline(x=0, line_color='black')
-    fig.add_hline(y=underlyingPrice, line_color='crimson', line_dash='dot', annotation_text=f'SPX {int(underlyingPrice)}')
+    fig.add_hline(y=underlyingPrice, line_color='black', line_dash='dot', annotation_text=f'SPX {int(underlyingPrice)}')
+    fig.add_hline(y=putGexPrice, line_color='crimson', line_dash='dot', annotation_text=f'Put Gex {int(putGexPrice)}', annotation_position='bottom left')
+    fig.add_hline(y=callGexPrice, line_color='green', line_dash='dot', annotation_text=f'Call Gex{int(callGexPrice)}', annotation_position='top left')
+    fig.add_hline(y=netGexPrice, line_color='orange', line_dash='solid', annotation_text=f'Secret {int(netGexPrice)}', annotation_position='top left')
+    #fig.add_annotation(text=f"Net GEX", x=-1000, y=netGexPrice, arrowhead=1, showarrow=True)
 
     xaxis = 'totalVolume'
     puts = df[(df.putCall == 'PUT')]
@@ -456,7 +476,8 @@ def func(n, symbol):
         fig2.add_annotation(text=f"{action} {row.strikePrice:.0f}@{row.mark:.2f}", x=row.volume, y=row.strikePrice, arrowhead=1, showarrow=True)
 
     df_base_mask = (df_base.mark > 0.44) & (df_base.sma5.abs() > 10)
-    unique_dates = df_base['processDateTime'].sort_values().unique().tolist()[-5:]
+    #unique_dates = df_base['processDateTime'].sort_values().unique().tolist()[-1:]
+    unique_dates = [ df_base['processDateTime'].max() ]
     frames = []
     for max_dt in unique_dates:
         data = []
@@ -473,14 +494,15 @@ def func(n, symbol):
         frames.append({'data': data, 'name': dt})
 
     [fig2.add_trace(trace) for trace in frames[-1]['data']]
+
     dict2 = fig2.to_dict()
     xaxis = 'volume'
-    xmax = max(calls[xaxis].abs().max(), puts[xaxis].abs().max() )
-    xmax = math.ceil(xmax / 100) * 100 + 100
+    xmax = max(calls[xaxis].abs().max(), puts[xaxis].abs().max(), 1000 )
+    #xmax = math.ceil(xmax / 100) * 100 + 100
     fig.update_yaxes(range=[-xmax, xmax])
     dict2['layout']['xaxis'] = {"range": [-xmax, xmax], 'title': xaxis }
-    dict2['layout']['updatemenus'] = [dict(type="buttons", font={'color':'black'}, buttons=[dict(label="last5", method="animate", args=[None])])]
-    dict2['frames'] = [ f for f in frames ]
+    #dict2['layout']['updatemenus'] = [dict(type="buttons", font={'color':'black'}, buttons=[dict(label="last5", method="animate", args=[None])])]
+    #dict2['frames'] = [ f for f in frames ]
     fig2 = go.Figure(dict2)
 
     content = [

@@ -6,31 +6,6 @@ import numpy as np
 import datetime
 import pytz
 import os
-# import functools
-# import logging
-
-# def console_logger():
-#     # create console handler and set level to debug
-#     ch = logging.StreamHandler()
-#     ch.setLevel(logging.DEBUG)
-
-#     # create formatter
-#     formatter = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
-#     formatter = logging.Formatter('%(asctime)s %(funcName)s: %(message)s')
-
-#     # add formatter to ch
-#     ch.setFormatter(formatter)
-
-#     # add ch to logger
-#     logger = logging.getLogger('app')
-#     logger.setLevel(logging.DEBUG)
-#     logger.addHandler(ch)
-#     return logger
-# #logger = console_logger()from dataclasses import dataclass
-
-# from dataclasses import dataclass
-# @dataclass
-# class SpreadTrade:
 
 class OptionQuotes:
     CALL = 'CALL'
