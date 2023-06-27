@@ -417,6 +417,7 @@ def func(n, symbol):
     df['sma15'] = df.volume.rolling(15).mean().round(2)
     #df['vwap5'] = df.groupby('symbol').apply(calculate_vwap, window=5).values
     #df['vwap15'] = df.groupby('symbol').apply(calculate_vwap, window=15).values
+    df['gexTV'] = (df['totalVolume'] * df.gamma).abs()
 
     max_dt = pd.to_datetime('2023-05-31 11:30:00-04:00')
     max_dt = df.processDateTime.max()
@@ -440,12 +441,15 @@ def func(n, symbol):
     netGexPrice = ((callGexPrice * callGexWeight) + (putGexPrice * putGexWeight)) / (callGexWeight + putGexWeight)
 
     fig = go.Figure(layout=go.Layout(title=go.layout.Title(text=f"Total Volume for Twoday {dt}"), barmode='overlay'))
-    fig.update_layout(barmode='overlay', yaxis_title='Strike Price', )
-    fig.update_layout(legend=dict(yanchor="bottom", y=1.05, xanchor="right", x=1, orientation="h",))
+    fig.update_layout(
+        barmode='overlay', yaxis_title='Strike Price',
+        legend=dict(yanchor="bottom", y=1.05, xanchor="right", x=1, orientation="h",),
+        margin=dict(l=10, r=10, t=10, b=10)  # Set left, right, top, and bottom margins to 10 pixels
+    )
     fig.update_yaxes(autorange="reversed")
-
     fig.add_vline(x=0, line_color='black')
     fig.add_hline(y=underlyingPrice, line_color='black', line_dash='dot', annotation_text=f'SPX {int(underlyingPrice)}')
+
     fig.add_hline(y=putGexPrice, line_color='crimson', line_dash='dot', annotation_text=f'Put Gex {int(putGexPrice)}', annotation_position='bottom left')
     fig.add_hline(y=callGexPrice, line_color='green', line_dash='dot', annotation_text=f'Call Gex{int(callGexPrice)}', annotation_position='top left')
     fig.add_hline(y=netGexPrice, line_color='orange', line_dash='solid', annotation_text=f'Secret {int(netGexPrice)}', annotation_position='top left')
@@ -456,13 +460,18 @@ def func(n, symbol):
     calls = df[(df.putCall == 'CALL')]
     fig.add_trace(go.Bar(x=calls[xaxis], y=calls.strikePrice, name='calls', orientation='h', marker_color='rgb(26, 118, 255)', ))
     fig.add_trace(go.Bar(x=puts[xaxis], y=puts.strikePrice, name='puts', orientation='h', marker_color='rgb(55, 83, 109)', ))
+    xmax = df[xaxis].abs().max()
+    xmax = math.ceil(xmax / 100) * 100 + 100
+    fig.update_xaxes(range=[-xmax, xmax])
     # NOTE: Does not work with reversed.
     # ymax = max(calls[xaxis].abs().max(), puts[xaxis].abs().max() )
     # fig.update_yaxes(range=[-ymax, ymax])
 
     # Figure 2
     fig2 = go.Figure(layout=go.Layout(title=go.layout.Title(text=f"Prior One Minute Volume (mark over 0.50 & sma5 vol > 10) {dt}"), barmode='overlay'))
-    fig2.update_layout(legend=dict(yanchor="bottom", y=1.05, xanchor="right", x=1, orientation="h",)) #, template='plotly_dark')
+    fig2.update_layout(legend=dict(yanchor="bottom", y=1.05, xanchor="right", x=1, orientation="h",),
+        margin=dict(l=10, r=10, t=10, b=10)  # Set left, right, top, and bottom margins to 10 pixels
+    ) #, template='plotly_dark')
     fig2.update_yaxes(autorange="reversed")
 
     fig2.add_vline(x=0, line_color='black', line_dash='dot')
@@ -498,18 +507,71 @@ def func(n, symbol):
     dict2 = fig2.to_dict()
     xaxis = 'volume'
     xmax = max(calls[xaxis].abs().max(), puts[xaxis].abs().max(), 1000 )
-    #xmax = math.ceil(xmax / 100) * 100 + 100
-    fig.update_yaxes(range=[-xmax, xmax])
     dict2['layout']['xaxis'] = {"range": [-xmax, xmax], 'title': xaxis }
     #dict2['layout']['updatemenus'] = [dict(type="buttons", font={'color':'black'}, buttons=[dict(label="last5", method="animate", args=[None])])]
     #dict2['frames'] = [ f for f in frames ]
     fig2 = go.Figure(dict2)
 
+    df = app.OptionQuotes[symbol].reload()
+    fig3 = gex_fig(df)
     content = [
         dbc.Col(dcc.Graph(id="strike-volume-left", config={"displayModeBar": False}, figure=fig), style= {'width': '49%', 'display': 'inline-block'}, class_name='card'),
         dbc.Col(dcc.Graph(id="strike-volume-right", config={"displayModeBar": False}, figure=fig2), style= {'width': '49%', 'display': 'inline-block'}, className='card'),
+        dbc.Col(dcc.Graph(id="strike-volume-left2", config={"displayModeBar": False}, figure=fig3), style= {'width': '49%', 'display': 'inline-block'}, className='card'),
+        dbc.Col(dcc.Graph(id="strike-volume-right2", config={"displayModeBar": False}, figure=fig2), style= {'width': '49%', 'display': 'inline-block'}, className='card'),
     ]
     return content
+
+def gex_fig(df):
+    df = df.sort_values(['symbol', 'processDateTime'])
+    # df = df.loc[(df.processDateTime.dt.time == pd.to_datetime('09:30').time(), 'pvt' )] = 0
+    # gb = df.groupby('symbol')
+    # df['markPctChange'] = gb['mark'].pct_change(1).fillna(0)
+
+    # Price Volume Trend
+    # df['pvt'] = (df.volume * df.markPctChange).fillna(0)
+    # df['pvt'] = df.groupby('symbol').pvt.cumsum()
+    # df['pvtGex'] = (df.volume * df.markPctChange * df.gamma).fillna(0)
+    # df['pvtGex'] = df.groupby('symbol').pvtGex.cumsum()
+    # df.loc[(df.putCall == 'PUT'), 'pvt'] *= -1
+    # df.loc[(df.putCall == 'PUT'), 'pvtGex'] *= 10
+
+    df['gexTV'] = df['totalVolume'] * df.gamma
+    df.loc[(df.putCall == 'CALL'), 'gex'] *= -1
+    df.loc[(df.putCall == 'CALL'), 'gexTV'] *= -1
+
+    max_dt = df.processDateTime.max()
+    df = df[(df.processDateTime == max_dt)]
+
+    gex = df.groupby(['putCall', 'strikePrice']).agg({'gex':sum, 'underlyingPrice':'mean', 'gexTV':sum, })
+    gex.reset_index(inplace=True)
+    gex = gex.loc[(gex.gexTV.abs() > 100)]
+
+    strikes_df = gex.groupby(['strikePrice']).agg({'gexTV':sum})
+    strikes_df.reset_index(inplace=True)
+    i = (strikes_df.strikePrice * strikes_df.gexTV).abs().sum() / (strikes_df.gexTV.abs().sum())
+    underlyingPrice = int(df.underlyingPrice.mean())
+
+    fig = go.Figure(layout=go.Layout(title=go.layout.Title(text=f"GEX Total Volume"), barmode='overlay'))
+    fig.update_layout(barmode='overlay', yaxis_title='Strike Price', )
+    fig.update_layout(legend=dict(yanchor="bottom", y=1.05, xanchor="right", x=1, orientation="h",))
+    fig.update_layout(
+        legend=dict(yanchor="bottom", y=1.05, xanchor="right", x=1, orientation="h",),
+        margin=dict(l=10, r=10, t=10, b=10)  # Set left, right, top, and bottom margins to 10 pixels
+    )
+    fig.update_yaxes(autorange="reversed")
+    fig.add_vline(x=0, line_color='black')
+    fig.add_hline(y=underlyingPrice, line_color='white', line_dash='dot', annotation_text=f'SPX {underlyingPrice}')
+
+    puts = gex.loc[(gex.putCall == 'PUT')]
+    calls = gex.loc[(gex.putCall == 'CALL')]
+    fig.add_trace(go.Bar(y=calls.strikePrice, x=calls.gexTV, name='Call Gex TV', orientation='h', marker_color='rgb(26, 118, 255)'))
+    fig.add_trace(go.Bar(y=puts.strikePrice, x=puts.gexTV, name='TotalVolume*GEX Puts', orientation='h', marker_color='rgb(55, 83, 109)'))
+    fig.add_trace(go.Bar(y=strikes_df.strikePrice, x=strikes_df.gexTV, name='NetTotalVolume*Gamma', width=1, marker_color='white', orientation='h'))
+    fig.add_hline(i, annotation_text=f"GEX Zero {int(i)}", line_dash='dash', annotation_position='top left')
+    xmax = gex.gexTV.abs().max()
+    fig.update_xaxes(range=[-xmax, xmax])
+    return fig
 
 def calculate_vwap(data, window=10):
     rolling_pv = (data['volume'] * data.mark).rolling(window=window, min_periods=1).sum()
