@@ -90,7 +90,7 @@ class OptionQuotes:
         drops = ['tradeTimeInLong', 'quoteTimeInLong', 'netChange', 'rho', 'vega',
             'bid', 'ask', 'highPrice', 'lowPrice', 'openPrice', 'closePrice', 'expirationDate', 'lastTradingDay', 'multiplier',
             'timeValue', 'theoreticalOptionValue', 'theoreticalVolatility', 'percentChange', 'markChange', 'markPercentChange', 'intrinsicValue',
-            'upDown', 'volumeUpDown', 'volumeUpDownCum', 'openInterestNet',
+            'upDown', 'volumeUpDown', 'volumeUpDownCum',
         ]
         df.drop([x for x in drops if x in df.columns], inplace=True, axis=1)
 
