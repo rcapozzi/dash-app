@@ -535,19 +535,15 @@ def gex_fig(symbol, mode=0):
     # df['pvt'] = df.groupby('symbol').pvt.cumsum()
     # df['pvtGex'] = (df.volume * df.markPctChange * df.gamma).fillna(0)
     # df['pvtGex'] = df.groupby('symbol').pvtGex.cumsum()
-    # df.loc[(df.putCall == 'PUT'), 'pvt'] *= -1
-    # df.loc[(df.putCall == 'PUT'), 'pvtGex'] *= 10
 
     if mode == 0:
         df['gexTV'] = df['totalVolume'] * df.gamma.abs()
         df.loc[(df.putCall == 'CALL'), 'gexTV'] *= -1
     else:
-        max_dt = df.processDateTime.max()
-        prior_dt = max_dt - datetime.timedelta(minutes=15)
         df['gexTV'] = df['totalVolume'] * df.gamma.abs()
         df.loc[(df.putCall == 'CALL'), 'gexTV'] *= -1
+        prior_dt = df.processDateTime.max() - datetime.timedelta(minutes=15)
         df = df.loc[(df.processDateTime <= prior_dt)]
-        # df['gexTV'] = df['openInterestNet'] * -1
 
     #unique_dates = df['processDateTime'].sort_values().unique().tolist()[-11:]
     max_dt = df.processDateTime.max()
