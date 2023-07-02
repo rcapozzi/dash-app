@@ -11,6 +11,7 @@ class OptionQuotes:
     CALL = 'CALL'
     PUT = 'PUT'
     def __init__(self, symbol,filename=None) -> None:
+        self.cache = {}
         self.symbol = symbol
         if filename:
             self.filename = filename

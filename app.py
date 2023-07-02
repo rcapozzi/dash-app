@@ -248,11 +248,12 @@ def update_strikesselector(symbol):
 #     return [n_intervals, fig, data]
 
 def table_content(oq):
-    now = oq.data.processDateTime.max()
-    data = oq.data
-    df = data[(data.processDateTime == now) & (data.totalVolume > data.totalVolume.mean())]
-    dt = dash_table.DataTable(df.to_dict('records'), [{"name": i, "id": i} for i in df.columns])
-    return [html.Label("Active Strikes"), dt]
+    #now = oq.data.processDateTime.max()
+    #data = oq.data
+    #df = data[(data.processDateTime == now) & (data.totalVolume > data.totalVolume.mean())]
+    #dt = dash_table.DataTable(df.to_dict('records'), [{"name": i, "id": i} for i in df.columns])
+    #return [html.Label("Active Strikes"), dt]
+    return [html.Label("Active Strikes")]
 
 def metric_content(symbol):
     style_metrics = {'padding': '5px', 'fontsize:': '10px'}
@@ -342,12 +343,10 @@ def func(n_interval, cookie):
     # bold_red = "\x1b[31;1m"
     # reset = "\x1b[0m"
     # fmt = f'{yellow}extendData_cb{reset}'
-
-    #dt = pytz.timezone("US/Eastern").localize(datetime.datetime(2023, 5, 19, 11, 0)) + datetime.timedelta(minutes=n_interval)
     max_dt = cookie['max_dt']
-    #app.logger.info(f'{fmt} << n_interval={n_interval} {yellow}max_dt={max_dt}  {red}dt={dt}{reset}')
-
+    # dt = max_dt + datetime.timedelta(minutes=n_interval)
     symbol = cookie['symbol']
+    # app.logger.info(f'{fmt} << n_interval={n_interval} {yellow}max_dt={max_dt} {red}symbol={symbol}{reset}')
     oq = app.OptionQuotes[cookie['symbol']]
     df = oq.reload()
     df = df[(df.processDateTime > max_dt)]
@@ -411,17 +410,25 @@ def func(symbol, strikes, xaxis, yaxis, intervalDisabled):
 )
 def func(n, symbol):
     df = app.OptionQuotes[symbol].reload()
-    df = df.sort_values(['symbol', 'processDateTime'])
+    max_dt = df.processDateTime.max()
+    if max_dt.time() == datetime.time(16, 0):
+        # app.logger.info(f'No updates after 16:00 max_dt={max_dt}')
+        return dash.no_update
+    # app.logger.info(f'strike-volume-div max_dt={max_dt}')
 
+    dt = max_dt.strftime('%Y-%m-%d %H:%M')
+    #TODO: Cache
+    # oq = app.OptionQuotes[symbol].cache
+    # if 'max_dt' in oq.cache and oq.cache['max_dt'] == max_dt:
+    #     figs = oq.cache['strike-figures']
+
+    df = df.sort_values(['symbol', 'processDateTime'])
     df['sma5'] = df.volume.rolling(5).mean().round(2)
     df['sma15'] = df.volume.rolling(15).mean().round(2)
     #df['vwap5'] = df.groupby('symbol').apply(calculate_vwap, window=5).values
     #df['vwap15'] = df.groupby('symbol').apply(calculate_vwap, window=15).values
     df['gexTV'] = (df['totalVolume'] * df.gamma).abs()
 
-    max_dt = pd.to_datetime('2023-05-31 11:30:00-04:00')
-    max_dt = df.processDateTime.max()
-    dt = max_dt.strftime('%Y-%m-%d %H:%M')
 
     mask = df['putCall'] == 'CALL'
     df.loc[mask, 'totalVolume'] *= -1
@@ -542,7 +549,10 @@ def gex_fig(symbol, mode=0):
     else:
         df['gexTV'] = df['totalVolume'] * df.gamma.abs()
         df.loc[(df.putCall == 'CALL'), 'gexTV'] *= -1
-        prior_dt = df.processDateTime.max() - datetime.timedelta(minutes=15)
+        max_dt = df.processDateTime.max()
+        prior_dt = max_dt - datetime.timedelta(minutes=15)
+        if prior_dt.time() < datetime.time(9, 30): max_dt = df.processDateTime.max()
+        if prior_dt.time() > datetime.time(14, 45): prior_dt.replace(hour=14, minute=45)
         df = df.loc[(df.processDateTime <= prior_dt)]
 
     #unique_dates = df['processDateTime'].sort_values().unique().tolist()[-11:]
@@ -553,8 +563,8 @@ def gex_fig(symbol, mode=0):
     df       = df.loc[(df.processDateTime == max_dt) & (df.gexTV.abs() > 5)]
 
     strikes_df = df.groupby(['strikePrice']).agg({'gexTV':sum}).reset_index()
-    gamma_flip = int((strikes_df.strikePrice * strikes_df.gexTV.abs()).sum() / (strikes_df.gexTV.abs().sum()))
     underlyingPrice = int(df.underlyingPrice.mean())
+    gamma_flip = int((strikes_df.strikePrice * strikes_df.gexTV.abs()).sum() / (strikes_df.gexTV.abs().sum()))
 
     puts = df.loc[(df.putCall == 'PUT')]
     calls = df.loc[(df.putCall == 'CALL')]

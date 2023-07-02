@@ -49,11 +49,11 @@ import pandas as pd
 from scipy.stats import percentileofscore
 from utils import OptionQuotes
 filename ='../tda-tbd/wip/SPX.X.2023-06-15.GEX.parquet'
-filename ='../tda-tbd/data/SPX.X.2023-06-15.parquet'
+filename ='../tda-tbd/data/SPX.X.2023-06-28.parquet'
 oq = OptionQuotes(symbol='abc',filename=filename)
 df_base = oq.reload()
 df = pd.read_parquet(filename)
-dfx = df.loc[(df.processDateTime >= pd.to_datetime('2023-06-06 15:59:00-04:00'))]
+dfx = df_base.loc[(df.processDateTime < pd.to_datetime('2023-06-22 14:59:00-04:00'))]
 dfx = df.loc[(df.processDateTime == df.processDateTime.max())]
 
 vix = pd.read_parquet('./vix.parquet')
@@ -106,3 +106,17 @@ dfx = df.loc[(df.putCall == 'CALL')]
 callGex = (dfx.gex * dfx.strikePrice).sum() / dfx.gex.sum()
 
 dfx.loc[(dfx.putCall == 'PUT'), 'gex'] *= -1
+
+
+
+def download_vix():
+    df = pd.read_csv('./DIX.csv')
+    end_date = df.date.max()
+    start_date = df.date.min()
+    vix = yf.download('^VIX', start=start_date, end=end_date)
+    vix = vix.rename(columns={'Close': 'close', 'Volume': 'volume'})
+    vix = vix.rename_axis('date').reset_index()
+    vix = vix[['date', 'close', 'volume']]
+    vix.to_parquet('./vix.parquet')
+    return vix
+vix = download_vix()
