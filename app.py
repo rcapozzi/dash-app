@@ -411,7 +411,7 @@ def func(symbol, strikes, xaxis, yaxis, intervalDisabled):
 )
 def func(n, symbol):
     cache_key = 'strike-volume-div'
-    app.logger.info(f"Volume by strikes << {n} {symbol}")
+    #app.logger.info(f"Volume by strikes << {n} {symbol}")
     oq = app.OptionQuotes[symbol]
     df = oq.reload()
     max_dt = oq.max_dt
