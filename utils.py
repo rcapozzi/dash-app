@@ -43,11 +43,19 @@ class OptionQuotes:
             #logger.info(f'OptionQuotes reload {self.symbol}')
             self.last_mtime = mtime
             self.data = pd.read_parquet(self.filename)
+            self.cache = {}
+            self.max_dt = self.data.processDateTime.max()
+            self.cache_set('max_dt', self.data.processDateTime.max())
             self.post_load_data()
 #        else:
             #logger.info(f'OptionQuotes reload {self.symbol} skipped')
         self._pivot = None
         return self.data
+    def cache_set(self,key,value):
+        self.cache[key] = value
+        return value
+    def cache_get(self,key):
+        return self.cache.get(key,None)
 
     def post_load_data(self):
         df = self.data

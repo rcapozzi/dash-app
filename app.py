@@ -77,7 +77,7 @@ def dash_layout():
             #html.H1(children="SPX 0DTE Option Chain Analytics"),
             html.Hr(),
             html.Details([
-                html.Summary('Secret Section', style={'color': 'red', 'background': 'black'}),
+                html.Summary('Secret Section (Based on https://github.com/rcapozzi/dash-app)', style={'color': 'red', 'background': 'black'}),
                 html.Div(id="data-table-div", children=table_content(app.OptionQuotes[symbols[0]])),
             ]),
             # html.Div(id='gauges-div', children=[dcc.Graph(id='gauges-graph')]),
@@ -253,6 +253,7 @@ def table_content(oq):
     #df = data[(data.processDateTime == now) & (data.totalVolume > data.totalVolume.mean())]
     #dt = dash_table.DataTable(df.to_dict('records'), [{"name": i, "id": i} for i in df.columns])
     #return [html.Label("Active Strikes"), dt]
+    """TODO: Log hot strikes where hot is TBD"""
     return [html.Label("Active Strikes")]
 
 def metric_content(symbol):
@@ -409,12 +410,16 @@ def func(symbol, strikes, xaxis, yaxis, intervalDisabled):
     Input("symbol", "value"),
 )
 def func(n, symbol):
-    df = app.OptionQuotes[symbol].reload()
-    max_dt = df.processDateTime.max()
-    if max_dt.time() == datetime.time(16, 0):
-        # app.logger.info(f'No updates after 16:00 max_dt={max_dt}')
+    cache_key = 'strike-volume-div'
+    app.logger.info(f"Volume by strikes << {n} {symbol}")
+    oq = app.OptionQuotes[symbol]
+    df = oq.reload()
+    max_dt = oq.max_dt
+    if n is not None and max_dt.time() == datetime.time(16, 0):
         return dash.no_update
-    # app.logger.info(f'strike-volume-div max_dt={max_dt}')
+    content = oq.cache_get(cache_key)
+    if content is not None:
+        return content
 
     dt = max_dt.strftime('%Y-%m-%d %H:%M')
     #TODO: Cache
@@ -530,14 +535,15 @@ def func(n, symbol):
         dbc.Col(dcc.Graph(id="strike-volume-left2", config={"displayModeBar": False}, figure=fig3), style= {'width': '49%', 'display': 'inline-block'}, className='card'),
         dbc.Col(dcc.Graph(id="strike-volume-right2", config={"displayModeBar": False}, figure=fig4), style= {'width': '49%', 'display': 'inline-block'}, className='card'),
     ]
-    return content
+    return oq.cache_set(cache_key, content)
 
 def gex_fig(symbol, mode=0):
-    df = app.OptionQuotes[symbol].reload()
-    df.sort_values(['symbol', 'processDateTime'], inplace=True)
+    oq = app.OptionQuotes[symbol]
+    df = oq.reload()
     # df = df.loc[(df.processDateTime.dt.time <= pd.to_datetime('14:00').time())]
 
     # Price Volume Trend
+    # df.sort_values(['symbol', 'processDateTime'], inplace=True)
     # df['pvt'] = (df.volume * df.markPctChange).fillna(0)
     # df['pvt'] = df.groupby('symbol').pvt.cumsum()
     # df['pvtGex'] = (df.volume * df.markPctChange * df.gamma).fillna(0)
@@ -549,7 +555,7 @@ def gex_fig(symbol, mode=0):
     else:
         df['gexTV'] = df['totalVolume'] * df.gamma.abs()
         df.loc[(df.putCall == 'CALL'), 'gexTV'] *= -1
-        max_dt = df.processDateTime.max()
+        max_dt = oq.max_dt
         prior_dt = max_dt - datetime.timedelta(minutes=15)
         if prior_dt.time() < datetime.time(9, 30): max_dt = df.processDateTime.max()
         if prior_dt.time() > datetime.time(14, 45): prior_dt.replace(hour=14, minute=45)
@@ -609,6 +615,6 @@ def calculate_vwap(data, window=10):
 #app.logger.addHandler(TimestampedHandler())
 
 if __name__ == '__main__':
-    app.logger.info("Dash app starting")
+    app.logger.info(f"Dash app starting {datetime.datetime.now().astimezone(pytz.timezone('US/Eastern'))}")
     app.run_server(debug=True, host='0.0.0.0')
     print("Done")
