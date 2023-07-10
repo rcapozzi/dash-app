@@ -22,7 +22,7 @@ import dash_mantine_components as dmc
 from dash_iconify import DashIconify
 import dash_bootstrap_components as dbc
 import dash_extendable_graph as deg
-from utils import OptionQuotes
+from utils import OptionQuotes, tos_ts_0dte_spy
 
 def is_market_open():
         from datetime import datetime, time
@@ -77,7 +77,8 @@ def dash_layout():
             #html.H1(children="SPX 0DTE Option Chain Analytics"),
             html.Hr(),
             html.Details([
-                html.Summary('Secret Section (Based on https://github.com/rcapozzi/dash-app)', style={'color': 'red', 'background': 'black'}),
+                html.Summary('Secret Section (Forked from https://github.com/rcapozzi/dash-app)', style={'color': 'red', 'background': 'black'}),
+                html.A("financialjuice", href="https://www.financialjuice.com/home"),
                 html.Div(id="data-table-div", children=table_content(app.OptionQuotes[symbols[0]])),
             ]),
             # html.Div(id='gauges-div', children=[dcc.Graph(id='gauges-graph')]),
@@ -146,6 +147,10 @@ def serve_data_raw_file(symbol):
     response.headers['Content-Disposition'] = f'attachment; filename=f"{symbol}.parquet"'
     return response
 
+@app.server.route('/tos/0dte_spy')
+def func():
+    return f'<pre>{tos_ts_0dte_spy()}</pre>'
+    
 @app.server.route('/data/<symbol>')
 def serve_data_file(symbol):
     import io
@@ -306,18 +311,24 @@ def chart_pc_summary(df, strikes, yaxis, xaxis, title=None):
 
         fig.update_layout(barmode='relative')
     else:
+        # TODO: Cleanup Symbol name to strikePrice{p,c}
+        # TODO: Drop symbols where volume = nan if distance.abs() > 50 and totalVolume < 500
         for s in symbols:
             filter = data[(data.symbol == s)]
             x = filter[xaxis]
             y = filter['y']
             cd= filter.mark
-            #ms= filter['mark'] * filter.volume.abs()/100
-            #fig.add_trace(go.Scattergl(x=x, y=y, customdata=cd, name=s, text=s, mode=mode, marker_size=ms, hovertemplate=hovertemplate), secondary_y=False)
-            fig.add_trace(go.Scattergl(x=x, y=y, customdata=cd, name=s, text=s, mode=mode, hovertemplate=hovertemplate), secondary_y=False)
+            s0 = filter.iloc[-1]
+            # if s0.totalVolume < 500 and abs(s0.distance) > 50:
+            #     app.logger.info(f'dropping {s}')
+            #     continue
+            s0 = filter.iloc[0]
+            name = f'{int(s0.strikePrice)}_{s0.putCall[0]}'
+            fig.add_trace(go.Scattergl(x=x, y=y, customdata=cd, name=name, mode=mode, hovertemplate=hovertemplate), secondary_y=False)
 
     if xaxis == 'processDateTime':
         ul = df.groupby('processDateTime').underlyingPrice.mean()
-        fig.add_trace(go.Scattergl(x=ul.index, y=ul, name="underlyingPrice", marker_color='white'), secondary_y=True)
+        fig.add_trace(go.Scattergl(x=ul.index, y=ul, name="underlyingPrice", marker_color='yellow'), secondary_y=True)
 
     fig['layout']['yaxis']['showgrid'] = False
     fig.update_yaxes(title_text="<b>underlyingPrice</b>", secondary_y=True, showgrid=True)
@@ -549,15 +560,12 @@ def gex_fig(symbol, mode=0):
     # df['pvtGex'] = (df.volume * df.markPctChange * df.gamma).fillna(0)
     # df['pvtGex'] = df.groupby('symbol').pvtGex.cumsum()
 
-    if mode == 0:
-        df['gexTV'] = df['totalVolume'] * df.gamma.abs()
-        df.loc[(df.putCall == 'CALL'), 'gexTV'] *= -1
-    else:
-        df['gexTV'] = df['totalVolume'] * df.gamma.abs()
-        df.loc[(df.putCall == 'CALL'), 'gexTV'] *= -1
+    df['gexTV'] = df['totalVolume'] * df.gamma.abs()
+    df.loc[(df.putCall == 'CALL'), 'gexTV'] *= -1
+    if mode == 1:
         max_dt = oq.max_dt
         prior_dt = max_dt - datetime.timedelta(minutes=15)
-        if prior_dt.time() < datetime.time(9, 30): max_dt = df.processDateTime.max()
+        if prior_dt.time() <= datetime.time(9, 30): prior_dt = oq.max_dt
         if prior_dt.time() > datetime.time(14, 45): prior_dt.replace(hour=14, minute=45)
         df = df.loc[(df.processDateTime <= prior_dt)]
 
