@@ -44,11 +44,11 @@ class OptionQuotes:
             self.last_mtime = mtime
             self.data = pd.read_parquet(self.filename)
             self.cache = {}
+            self.post_load_data()
             self.max_dt = self.data.processDateTime.max()
             self.cache_set('max_dt', self.data.processDateTime.max())
-            self.post_load_data()
 #        else:
-            #logger.info(f'OptionQuotes reload {self.symbol} skipped')
+            # print(f'OptionQuotes reload {self.symbol} skipped', flush=True)
         self._pivot = None
         return self.data
     def cache_set(self,key,value):
@@ -184,21 +184,29 @@ class EasternDT:
     def now(cls):
         return datetime.datetime.now(cls.eastern_timezone)
 
-def tos_ts_0dte_spy():
+def tos_ts_0dte(symbol='SPY'):
     """Thinkscript for SPY 0DTE"""
     import yfinance as yf
     from jinja2 import Template
     from datetime import datetime, timedelta
 
-    # Fetch SPY price from Yahoo Finance
-    spy = yf.Ticker("SPY")
-    spy_price = spy.history(period="1d").iloc[-1]['Close']
+    yf_symbol = '^GSPC' if symbol == 'SPX' else symbol
+    symbol = 'SPXW' if symbol == 'SPX' else symbol
 
-    # Calculate strike prices
-    strike_prices = [int(spy_price - i) for i in range(5, -6, -1)]
+    # Fetch SPY price from Yahoo Finance
+    quote = yf.Ticker(yf_symbol)
+    price = quote.history(period="1d").iloc[-1]['Close']
+
+    if price > 1000:
+        price = round(price / 5) * 5
+        # ary = [0, 20, 25, 40, 50, 60, 75, 80]
+        strike_prices = [int(price - i) for i in range(100, -106, -5)]
+    else:
+        strike_prices = [int(price - i) for i in range(5, -6, -1)]
 
     # Get current date and time
     expiration_date = datetime.now()
+    expiration_date = EasternDT.now()
     if expiration_date.hour >= 16:
         expiration_date = expiration_date + timedelta(days=1)
     else:
@@ -206,13 +214,10 @@ def tos_ts_0dte_spy():
     expiration_date = expiration_date.strftime("%y%m%d")
 
     # Generate option codes
-    call_codes = [f"SPY{expiration_date}C{price}" for price in strike_prices]
-    put_codes = [f"SPY{expiration_date}P{price}" for price in strike_prices]
+    call_codes = [f"{symbol}{expiration_date}C{price}" for price in strike_prices]
+    put_codes = [f"{symbol}{expiration_date}P{price}" for price in strike_prices]
 
     # Create Jinja2 template
-    # ThinkScript code
-    # declare lower;
-    # input fundamentalType = FundamentalType.VOLUME;
     template_code = '''
 declare lower;
 input fundamentalType = FundamentalType.OHLC4;
@@ -221,10 +226,20 @@ script fixnan{
     def fix = if !isNaN(source) then source else fix[1];
     plot result = fix;
 }
-def callMetric = {% for option in call_codes %}(fixnan(volume(".{{ option }}")) * fixnan(Fundamental(fundamentalType,".{{ option }}"))) + {% endfor %} 0;
-def putMetric = 
-    {% for option in put_codes %}(fixnan(volume(".{{ option }}")) * fixnan(Fundamental(fundamentalType,".{{ option }}"))) + 
+script fixnanMultiply{
+    input s1 = close;
+    def fix1 = if !isNaN(s1) then s1 else fix1[1];
+    input s2 = close;
+    def fix2 = if !isNaN(s2) then s2 else fix2[1];
+    plot result = fix1 * fix2;
+}
+
+def callMetric =
+    {% for option in call_codes %}(fixnan(volume(".{{ option }}")) * fixnan(Fundamental(fundamentalType,".{{ option }}"))) +
     {% endfor %} 0;
+def putMetric =
+    {% for option in put_codes %}(fixnanMultiply(volume(".{{ option }}"), Fundamental(fundamentalType,".{{ option }}"))) +
+    {% endfor %} 0; # Trailing zero saves the day
 
 plot Calls = if SecondsFromTime(935) >= 0 then callMetric else 0;
 Calls.SetPaintingStrategy(PaintingStrategy.SQUARED_HISTOGRAM);
@@ -236,14 +251,14 @@ Puts.AssignValueColor(Color.DOWNTICK);
 
 plot NetMetric = Calls + Puts;
 NetMetric.AssignValueColor(Color.WHITE);
-
-    '''
+'''
     template = Template(template_code)
     thinkscript_code = template.render(call_codes=call_codes, put_codes=put_codes)
     return thinkscript_code
 
 
 # # Fetch SPX price from Yahoo Finance
-# spx = yf.Ticker("^SPX")
-# spx_price = spx.history(period="1d").iloc[-1]['Close']
-# rounded_spx_price = round(spx_price / 5) * 5
+def tos_ts_0dte_spx(symbol='SPY'):
+    spx = yf.Ticker("^SPX")
+    spx_price = spx.history(period="1d").iloc[-1]['Close']
+    rounded_spx_price = round(spx_price / 5) * 5

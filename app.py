@@ -22,7 +22,7 @@ import dash_mantine_components as dmc
 from dash_iconify import DashIconify
 import dash_bootstrap_components as dbc
 import dash_extendable_graph as deg
-from utils import OptionQuotes, tos_ts_0dte_spy
+from utils import OptionQuotes, tos_ts_0dte
 
 def is_market_open():
         from datetime import datetime, time
@@ -39,7 +39,9 @@ def is_market_open():
 
 def get_files():
     file_dict = {}
-    for filename in glob.glob('../tda-tbd/data/*.parquet'):
+    for filename in glob.glob('../tda-tbd/wip/*.parquet'):
+        if filename.find('chain') != -1: continue
+        if 'chain' in filename: continue
         filename = filename.replace('\\', '/')
         match = re.search(r"([^/]+)\.parquet$", filename)
         if match:
@@ -48,7 +50,7 @@ def get_files():
     keys = sorted(file_dict.keys(), reverse=True)[:20]
     file_dict = {key: value for key, value in file_dict.items() if key in keys}
     return file_dict
-
+#%%
 def dash_layout():
     symbols = ['SPX.X', 'SPY']
     symbols = ['SPX.X']
@@ -147,10 +149,10 @@ def serve_data_raw_file(symbol):
     response.headers['Content-Disposition'] = f'attachment; filename=f"{symbol}.parquet"'
     return response
 
-@app.server.route('/tos/0dte_spy')
-def func():
-    return f'<pre>{tos_ts_0dte_spy()}</pre>'
-    
+@app.server.route('/tos/0dte/<symbol>')
+def func(symbol):
+    return f'<pre>{tos_ts_0dte(symbol)}</pre>'
+
 @app.server.route('/data/<symbol>')
 def serve_data_file(symbol):
     import io
@@ -426,7 +428,7 @@ def func(n, symbol):
     oq = app.OptionQuotes[symbol]
     df = oq.reload()
     max_dt = oq.max_dt
-    if n is not None and max_dt.time() == datetime.time(16, 0):
+    if n is not None and max_dt.time() >= datetime.time(16, 0):
         return dash.no_update
     content = oq.cache_get(cache_key)
     if content is not None:
