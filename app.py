@@ -50,7 +50,16 @@ def get_files():
     keys = sorted(file_dict.keys(), reverse=True)[:20]
     file_dict = {key: value for key, value in file_dict.items() if key in keys}
     return file_dict
+
+def static_link(page):
+    return html.A(f"{page}.html", 
+                  href=f"static/{page}.html", 
+                  style={'margin-right': '10px'},
+                  target="_blank"
+                  )
+    
 #%%
+
 def dash_layout():
     symbols = ['SPX.X', 'SPY']
     symbols = ['SPX.X']
@@ -80,9 +89,13 @@ def dash_layout():
             html.Hr(),
             html.Details([
                 html.Summary('Secret Section (Forked from https://github.com/rcapozzi/dash-app)', style={'color': 'red', 'background': 'black'}),
-                html.A("financialjuice", href="https://www.financialjuice.com/home"),
+                html.Div(html.A("financialjuice", href="https://www.financialjuice.com/home")),
                 html.Div(id="data-table-div", children=table_content(app.OptionQuotes[symbols[0]])),
             ]),
+            html.Div([
+                static_link("traderade-0dte"),
+                static_link("traderade-0dte-alt"),
+            ], style={'display': 'flex', 'color': 'red', 'background': 'yellow'}),
             # html.Div(id='gauges-div', children=[dcc.Graph(id='gauges-graph')]),
             html.Div(id='metrics-div', style={'padding': '5px', 'fontsize:': '10px', 'font-family': 'monospace'}, ),
             html.Div(id='strike-volume-div'),
@@ -140,13 +153,26 @@ server = app.server
 app.title = 'SPX 0DTE Chain React Analytics Peaker'
 app.layout = dash_layout
 
-from flask import send_file, make_response, request
+from flask import send_file, make_response, request, send_from_directory, make_response
 @app.server.route('/data/raw/<symbol>')
 def serve_data_raw_file(symbol):
     app.logger.info(f'serve_data_raw_file {symbol}')
     oq = app.OptionQuotes[symbol]
     response = make_response(send_file(oq.filename))
     response.headers['Content-Disposition'] = f'attachment; filename=f"{symbol}.parquet"'
+    return response
+
+# @app.server.after_request
+# def add_cache_control(response):
+#     app.logger.info(f'after_request {request.url} {response}')
+# #    response.headers['Cache-Control'] = 'public, max-age=3600'
+#     return response
+
+@app.server.route('/static/<path>')
+def serve_static(path):
+    # app.logger.info(f'serve {path}')
+    response = send_from_directory('static', path)
+    response.headers['Cache-Control'] = 'public, max-age=3600'
     return response
 
 @app.server.route('/tos/0dte/<symbol>')
@@ -287,16 +313,14 @@ def chart_pc_summary(df, strikes, yaxis, xaxis, title=None):
         data['sign'] = np.where(data['volume'] < 50, np.nan, np.where(data['putCall'] == 'CALL', 1, -1))
     else:
         data['sign'] = np.where(data['putCall'] == 'CALL', 1, -1)
-    data['y'] = data[yaxis] * data['sign']
-
     data = data.sort_values(['symbol', 'processDateTime'])
-    symbols = data.symbol.sort_values().unique()
+    # data['volumeMark'] = data.volume * data.mark
+    # data['volumeMark'] = data.groupby('symbol').volumeMark.cumsum()
 
     mode = 'lines' if xaxis == 'processDateTime' and yaxis == 'gex' else 'markers'
     stackgroup =  'all' if xaxis == 'processDateTime' and yaxis == 'gex' else None
     if xaxis == 'strikePrice':
-        max_dt = data.processDateTime.max()
-        data = data[(df.processDateTime == max_dt)]
+        data = data[(df.processDateTime == data.processDateTime.max())]
         data['color'] = 'rgb(26, 118, 255)'
 
         puts = data['putCall'] == 'PUT'
@@ -313,8 +337,9 @@ def chart_pc_summary(df, strikes, yaxis, xaxis, title=None):
 
         fig.update_layout(barmode='relative')
     else:
-        # TODO: Cleanup Symbol name to strikePrice{p,c}
         # TODO: Drop symbols where volume = nan if distance.abs() > 50 and totalVolume < 500
+        data['y'] = data[yaxis] * data['sign']
+        symbols = data.symbol.sort_values().unique()
         for s in symbols:
             filter = data[(data.symbol == s)]
             x = filter[xaxis]
@@ -325,7 +350,7 @@ def chart_pc_summary(df, strikes, yaxis, xaxis, title=None):
             #     app.logger.info(f'dropping {s}')
             #     continue
             s0 = filter.iloc[0]
-            name = f'{int(s0.strikePrice)}_{s0.putCall[0]}'
+            name = f'{int(s0.strikePrice)}{s0.putCall[0]}'
             fig.add_trace(go.Scattergl(x=x, y=y, customdata=cd, name=name, mode=mode, hovertemplate=hovertemplate), secondary_y=False)
 
     if xaxis == 'processDateTime':
@@ -342,6 +367,8 @@ def chart_pc_summary(df, strikes, yaxis, xaxis, title=None):
 
 
 @app.callback(
+    Output("notify-container", "children", allow_duplicate=True),
+    Output("pc-summary-interval", "disabled", allow_duplicate=True),
     Output("pc-summary-store", "data", allow_duplicate=True),
     Output("pc-summary-graph", "extendData"),
     Output("data-table-div", "children"),
@@ -351,6 +378,13 @@ def chart_pc_summary(df, strikes, yaxis, xaxis, title=None):
     prevent_initial_call=True
 )
 def func(n_interval, cookie):
+    notification = dash.no_update
+    intervalDisabled = dash.no_update
+    if not is_market_open():
+        cookie = updates = c0 = c1 = dash.no_update
+        intervalDisabled = True
+        notification = dmc.Notification(id="my-notification", message=f"Updates disabled", color="red", action="show", autoClose=5_000)
+        return notification, intervalDisabled, cookie, updates, c0, c1
     # grey = "\x1b[38;20m"
     # yellow = "\x1b[33;20m"
     # red = "\x1b[31;20m"
@@ -388,7 +422,7 @@ def func(n_interval, cookie):
     # app.logger.info(f'{fmt} >> updates={updates}')
     c0 = table_content(oq)
     c1 = metric_content(symbol)
-    return cookie, updates, c0, c1
+    return notification, intervalDisabled, cookie, updates, c0, c1
 
 @app.callback(
     Output("notify-container", "children"),
@@ -564,12 +598,18 @@ def gex_fig(symbol, mode=0):
 
     df['gexTV'] = df['totalVolume'] * df.gamma.abs()
     df.loc[(df.putCall == 'CALL'), 'gexTV'] *= -1
+    title = "Gamma Total Volume"
     if mode == 1:
+        title = "CumSum Mark*Volume"
+        df['gexTV'] = df.volume * df.mark
+        df['gexTV'] = df.groupby('symbol').gexTV.cumsum()
+        df.loc[(df.putCall == 'CALL'), 'gexTV'] *= -1
+
         max_dt = oq.max_dt
         prior_dt = max_dt - datetime.timedelta(minutes=15)
         if prior_dt.time() <= datetime.time(9, 30): prior_dt = oq.max_dt
         if prior_dt.time() > datetime.time(14, 45): prior_dt.replace(hour=14, minute=45)
-        df = df.loc[(df.processDateTime <= prior_dt)]
+        # df = df.loc[(df.processDateTime <= prior_dt)]
 
     #unique_dates = df['processDateTime'].sort_values().unique().tolist()[-11:]
     max_dt = df.processDateTime.max()
@@ -585,7 +625,7 @@ def gex_fig(symbol, mode=0):
     puts = df.loc[(df.putCall == 'PUT')]
     calls = df.loc[(df.putCall == 'CALL')]
 
-    fig = go.Figure(layout=go.Layout(title=go.layout.Title(text=f"Gamma Total Volume {dt}"), barmode='overlay'))
+    fig = go.Figure(layout=go.Layout(title=go.layout.Title(text=f"{title} {dt}"), barmode='overlay'))
     fig.update_layout(
         barmode='overlay', yaxis_title='Strike Price',
         legend=dict(yanchor="bottom", y=1.05, xanchor="right", x=1, orientation="h",),
