@@ -262,3 +262,93 @@ def tos_ts_0dte_spx(symbol='SPY'):
     spx = yf.Ticker("^SPX")
     spx_price = spx.history(period="1d").iloc[-1]['Close']
     rounded_spx_price = round(spx_price / 5) * 5
+
+import datetime
+import pandas as pd
+import pandas_market_calendars as mcal
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
+import functools
+
+class MarketIntervalCalculator:
+    """
+    Computes the next update time for an application that polls during NYSE market hours.
+
+    Intended to be instantiated once at application startup.
+    Use get_next_update_time() for each web request.
+    """
+
+    NYSE_TIMEZONE_STR = 'America/New_York'
+
+    def __init__(self):
+        try:
+            self._market_tz = ZoneInfo(self.NYSE_TIMEZONE_STR)
+        except ZoneInfoNotFoundError as e:
+            raise RuntimeError(f"Timezone not found: {e}")
+
+        try:
+            self._nyse_calendar = mcal.get_calendar('NYSE')
+        except Exception as e:
+            raise RuntimeError(f"Failed to load NYSE calendar: {e}")
+
+    def get_market_close(self) -> datetime:
+        now = datetime.datetime.now(self._market_tz)
+        schedule_today = self._get_market_schedule_for_date(now.date())
+        return schedule_today.iloc[0]['market_close'].astimezone(self._market_tz)
+
+    @functools.lru_cache(maxsize=2)
+    def _get_market_schedule_for_date(self, date_obj):
+        """Returns NYSE open/close times for a given date."""
+        return self._nyse_calendar.schedule(start_date=date_obj, end_date=date_obj)
+
+    def get_next_update_time(self) -> datetime.datetime:
+        """
+        Returns the next datetime when the app should poll for updates:
+        - If the market is open: next top-of-minute plus 5 seconds, capped at market close.
+        - If the market is closed: next market open time.
+        """
+        now = datetime.datetime.now(self._market_tz)
+
+        schedule_today = self._get_market_schedule_for_date(now.date())
+        if schedule_today is not None and not schedule_today.empty:
+            market_open = schedule_today.iloc[0]['market_open'].astimezone(self._market_tz)
+            market_close = schedule_today.iloc[0]['market_close'].astimezone(self._market_tz)
+
+            if market_open <= now < market_close:
+                # Market is open — return next top-of-minute, capped at market_close
+                next_minute = (now + datetime.timedelta(minutes=1)).replace(second=0, microsecond=0)
+                return min(next_minute, market_close)
+
+            elif now < market_open:
+                # Market not open yet today
+                return market_open
+
+        # Market closed today — look ahead for next open day
+        check_date = now.date() + datetime.timedelta(days=1)
+        for _ in range(10):  # Search up to 10 days ahead
+            schedule = self._get_market_schedule_for_date(check_date)
+            if schedule is not None and not schedule.empty:
+                return schedule.iloc[0]['market_open'].astimezone(self._market_tz)
+            check_date += datetime.timedelta(days=1)
+
+        # If no open day found in 10 days, return 1 hour from now
+        return now + datetime.timedelta(hours=1)
+
+    def is_market_open(self) -> bool:
+        """
+        Checks if the NYSE market is currently open.
+
+        Returns:
+            bool: True if the market is open, False otherwise.
+        """
+        if self._market_tz is None or self._nyse_calendar is None:
+            return False
+
+        now = datetime.datetime.now(self._market_tz)
+        schedule_today = self._get_market_schedule_for_date(now.date())
+
+        if schedule_today is not None and not schedule_today.empty:
+            market_open_today = schedule_today.iloc[0]['market_open'].astimezone(self._market_tz)
+            market_close_today = schedule_today.iloc[0]['market_close'].astimezone(self._market_tz)
+            return market_open_today <= now < market_close_today
+
+        return False
