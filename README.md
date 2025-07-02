@@ -1,4 +1,5 @@
-Dashboard for 0DTE opions
+# Dashboard for 0DTE opions
+![Screenshot](images/demo.gif)
 
 Designed to read a Pandas dataframe from a Parquet file if/when that file changes.
 This approach allows the web server to not need/make calls to other Internet services.
