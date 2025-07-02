@@ -97,7 +97,7 @@ df = df_all.loc[(df_all.processDateTime == max_dt) & (df_all.expirationDate >= t
 #df = df.groupby(['putCall', 'strikePrice']).gex.sum().to_frame()
 #dfx = df.groupby(['strikePrice', 'putCall']).agg({'gex':'sum','underlyingPrice':'mean'})
 #df = df.reset_index()
-#df = df.loc[(df.gex > 0.0)]
+#daf = df.loc[(df.gex > 0.0)]
 
 # data['sign'] = np.where(np.where(data['putCall'] == 'CALL', 1, -1))
 dfx = df.loc[(df.putCall == 'PUT')]
@@ -109,14 +109,20 @@ dfx.loc[(dfx.putCall == 'PUT'), 'gex'] *= -1
 
 
 
-def download_vix():
-    df = pd.read_csv('./DIX.csv')
-    end_date = df.date.max()
-    start_date = df.date.min()
-    vix = yf.download('^VIX', start=start_date, end=end_date)
-    vix = vix.rename(columns={'Close': 'close', 'Volume': 'volume'})
-    vix = vix.rename_axis('date').reset_index()
-    vix = vix[['date', 'close', 'volume']]
-    vix.to_parquet('./vix.parquet')
-    return vix
-vix = download_vix()
+import datetime
+def load_data(filename):
+    dfx = pd.read_parquet(filename)
+    dfx['time'] = dfx.processDateTime.dt.time
+    dfx.sort_values(['symbol', 'processDateTime'], inplace=True)
+    dfx['underlyingPrice'] = dfx.underlyingPrice.round(0)
+    dfx['distance'] = (dfx['strikePrice'] - dfx['underlyingPrice']).apply(lambda x: round(x / 5) * 5)
+    gb = dfx.groupby('symbol')
+    dfx['volume'] = gb['totalVolume'].diff().fillna(0)
+    dfx = dfx.fillna(0)
+    dfx['gex'] = dfx['volume'] * dfx.gamma
+    dfx = dfx.loc[(dfx.processDateTime.dt.time < datetime.time(15, 30) )]
+    dfx['distanceAbs'] = dfx.distance.abs()
+    dfx = dfx.loc[(dfx.distance.abs() <= 100)]
+    #dfx = dfx.loc[(dfx.processDateTime.dt.minute == 0) | (dfx.processDateTime.dt.minute == 30)]
+    return dfx
+dfx = load_data('wip/SPX.X.2023-07-10.chain.parquet')
